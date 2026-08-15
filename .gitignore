@@ -1,0 +1,22 @@
+# IntelliJ IDEA
+.idea/
+*.iml
+out/
+
+# Maven
+target/
+.m2/
+
+# Application runtime data
+client-data/
+server-data/
+worker-data/
+
+# Temporary files and logs
+tmp/
+*.log
+*.part
+
+# Operating systems
+.DS_Store
+Thumbs.db
