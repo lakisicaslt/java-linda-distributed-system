@@ -42,3 +42,23 @@ Ako prva četiri bajta nisu `KDP1`, konekcija se odbacuje kao pogrešan protokol
 ## Uloge i poruke
 
 Nakon handshake-a svaka poruka se proverava prema ulozi konekcije. Na primer, `HEARTBEAT` je dozvoljen na WORKER sesiji, a `SUBMIT_BATCH` na CLIENT sesiji. Pokušaj slanja poruke druge uloge završava se greškom `ROLE_VIOLATION`.
+
+## Registracija radne stanice
+
+WORKER sesija odmah nakon handshake-a šalje `REGISTER_WORKER`. Payload redom sadrži:
+
+| Polje | Zapis |
+|---|---|
+| Worker ID | UUID, 16 B |
+| Hostname | dužina `int`, zatim UTF-8 bajtovi |
+| Operativni sistem | dužina `int`, zatim UTF-8 bajtovi |
+| Java verzija | dužina `int`, zatim UTF-8 bajtovi |
+| Kapacitet | pozitivan `int` |
+
+Svaki tekst može imati najviše 4096 bajtova. Server potvrđuje registraciju praznim
+`WORKER_REGISTERED` frame-om sa istim request ID-jem. Ponovljena registracija na
+istoj konekciji i istovremene konekcije sa istim worker ID-jem nisu dozvoljene.
+
+Posle registracije worker periodično šalje `HEARTBEAT` čiji payload sadrži njegov
+UUID od 16 bajtova. ID mora odgovarati ID-ju registrovanom za tu konekciju. Server
+ne šalje odgovor na svaki heartbeat, čime se izbegava nepotreban mrežni saobraćaj.

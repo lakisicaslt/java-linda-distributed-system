@@ -1,8 +1,10 @@
 package rs.ac.bg.etf.kdp.server;
 
 import rs.ac.bg.etf.kdp.common.protocol.MessageType;
+import rs.ac.bg.etf.kdp.common.protocol.ConnectionRole;
 
 import java.nio.charset.StandardCharsets;
+import java.util.Map;
 
 public final class ServerMain {
 
@@ -18,10 +20,15 @@ public final class ServerMain {
                 ServerConfig.DEFAULT_MAX_CONNECTIONS,
                 5_000);
 
-        CentralServer server = new CentralServer(config, (connection, frame) -> {
+        WorkerRegistry workerRegistry = new WorkerRegistry();
+        WorkerSessionHandler workerHandler = new WorkerSessionHandler(workerRegistry);
+        ServerMessageHandler notImplemented = (connection, frame) -> {
             String message = "Message is not implemented yet: " + frame.getType();
             connection.send(frame.reply(MessageType.ERROR, message.getBytes(StandardCharsets.UTF_8)));
-        });
+        };
+        ServerMessageRouter router = new ServerMessageRouter(
+                Map.of(ConnectionRole.WORKER, workerHandler), notImplemented);
+        CentralServer server = new CentralServer(config, router);
 
         Runtime.getRuntime().addShutdownHook(new Thread(server::close, "kdp-server-shutdown"));
         server.start();

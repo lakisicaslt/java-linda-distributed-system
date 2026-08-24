@@ -64,6 +64,7 @@ class CentralServerTest {
 
         try (Socket ignored = connectAndHandshake(ConnectionRole.CLIENT)) {
             assertTrue(server.isRunning());
+            awaitConnectedCount(handler, 1);
             assertEquals(1, handler.connected.get());
         }
     }
@@ -83,6 +84,7 @@ class CentralServerTest {
         assertEquals(0, handler.messages.get());
         try (Socket ignored = connectAndHandshake(ConnectionRole.CLIENT)) {
             assertTrue(server.isRunning());
+            awaitConnectedCount(handler, 2);
             assertEquals(2, handler.connected.get());
         }
     }
@@ -126,6 +128,7 @@ class CentralServerTest {
 
         try (Socket ignored = connectAndHandshake(ConnectionRole.CLIENT)) {
             assertTrue(server.isRunning());
+            awaitConnectedCount(handler, 1);
             assertEquals(1, handler.connected.get());
         }
     }
@@ -165,6 +168,14 @@ class CentralServerTest {
                 "127.0.0.1", server.getLocalPort(), 1_000, 1_000)) {
             socket.getOutputStream().write(text.getBytes(StandardCharsets.US_ASCII));
             socket.getOutputStream().flush();
+        }
+    }
+
+    private static void awaitConnectedCount(RecordingHandler handler, int expected)
+            throws InterruptedException {
+        long deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(2);
+        while (handler.connected.get() < expected && System.nanoTime() < deadline) {
+            Thread.sleep(10);
         }
     }
 

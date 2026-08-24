@@ -29,4 +29,24 @@ Cilj je izrada distribuiranog sistema koji prima Java poslove, raspoređuje ih n
 mvn clean test
 ```
 
-Trenutno je postavljen samo kostur projekta. Funkcionalna implementacija će se dodavati korak po korak.
+## Trenutno funkcionalan tok
+
+Centralni server prihvata Java NET konekcije i proverava verziju protokola i ulogu
+udaljenog programa. Headless radna stanica može da se poveže, registruje svoje
+osnovne podatke i kapacitet, a zatim periodično šalje heartbeat. Server je vodi kao
+`ONLINE` dok je konekcija aktivna i kao `OFFLINE` nakon prekida veze.
+
+Ručna provera iz IntelliJ IDEA:
+
+1. Pokrenuti `rs.ac.bg.etf.kdp.server.ServerMain` iz modula `kdp-server`.
+2. Pokrenuti `rs.ac.bg.etf.kdp.worker.WorkerMain` iz modula `kdp-worker`.
+3. Worker bez argumenata koristi `127.0.0.1:5050` i broj dostupnih procesora kao kapacitet.
+
+`WorkerMain` prima opcione argumente:
+
+```text
+WorkerMain [server-host] [server-port] [capacity]
+```
+
+Ovo je potpuno headless pokretanje. Swing interfejs će kasnije koristiti isti
+`WorkerClient`, tako da mrežna logika neće biti duplirana.

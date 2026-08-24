@@ -1,0 +1,77 @@
+package rs.ac.bg.etf.kdp.worker;
+
+import org.junit.jupiter.api.AfterEach;
+import org.junit.jupiter.api.Test;
+import rs.ac.bg.etf.kdp.common.domain.Worker;
+import rs.ac.bg.etf.kdp.common.domain.WorkerStatus;
+import rs.ac.bg.etf.kdp.common.protocol.ProtocolConstants;
+import rs.ac.bg.etf.kdp.server.CentralServer;
+import rs.ac.bg.etf.kdp.server.ServerConfig;
+import rs.ac.bg.etf.kdp.server.WorkerRegistry;
+import rs.ac.bg.etf.kdp.server.WorkerSessionHandler;
+
+import java.time.Instant;
+import java.util.UUID;
+import java.util.concurrent.TimeUnit;
+import java.util.function.BooleanSupplier;
+
+import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertTrue;
+
+class WorkerClientIntegrationTest {
+
+    private CentralServer server;
+    private WorkerClient client;
+
+    @AfterEach
+    void cleanUp() {
+        if (client != null) {
+            client.close();
+        }
+        if (server != null) {
+            server.close();
+        }
+    }
+
+    @Test
+    void registersSendsHeartbeatsAndBecomesOfflineAfterDisconnect() throws Exception {
+        WorkerRegistry registry = new WorkerRegistry();
+        server = new CentralServer(
+                new ServerConfig("127.0.0.1", 0, 10, 4, 1_000),
+                new WorkerSessionHandler(registry));
+        server.start();
+
+        UUID workerId = UUID.randomUUID();
+        WorkerConfig config = new WorkerConfig(
+                "127.0.0.1",
+                server.getLocalPort(),
+                workerId,
+                3,
+                ProtocolConstants.CONNECT_TIMEOUT_MILLIS,
+                ProtocolConstants.HANDSHAKE_TIMEOUT_MILLIS,
+                50);
+        client = new WorkerClient(config);
+        client.start();
+
+        Worker worker = registry.find(workerId).orElseThrow();
+        Instant registeredAt = worker.getRegisteredAt();
+        assertEquals(WorkerStatus.ONLINE, worker.getStatus());
+        assertEquals(3, worker.getCapacity());
+        assertTrue(await(() -> registry.find(workerId)
+                .map(registered -> registered.getLastHeartbeatAt().isAfter(registeredAt))
+                .orElse(false)));
+
+        client.close();
+        assertTrue(await(() -> registry.find(workerId)
+                .map(registered -> registered.getStatus() == WorkerStatus.OFFLINE)
+                .orElse(false)));
+    }
+
+    private static boolean await(BooleanSupplier condition) throws InterruptedException {
+        long deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(2);
+        while (!condition.getAsBoolean() && System.nanoTime() < deadline) {
+            Thread.sleep(10);
+        }
+        return condition.getAsBoolean();
+    }
+}
