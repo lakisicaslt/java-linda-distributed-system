@@ -121,14 +121,22 @@ class JobBatchTest {
     }
 
     private static void complete(Job job, long offsetSeconds) {
+        Task rootTask = job.getRootTask();
+        rootTask.assignTo(UUID.randomUUID(), CREATED_AT.plusSeconds(offsetSeconds));
         job.schedule(CREATED_AT.plusSeconds(offsetSeconds));
+        rootTask.markRunning(CREATED_AT.plusSeconds(offsetSeconds + 1));
         job.markRunning(CREATED_AT.plusSeconds(offsetSeconds + 1));
+        rootTask.markDone(CREATED_AT.plusSeconds(offsetSeconds + 2));
         job.markDone(CREATED_AT.plusSeconds(offsetSeconds + 2));
     }
 
     private static void fail(Job job, long offsetSeconds) {
+        Task rootTask = job.getRootTask();
+        rootTask.assignTo(UUID.randomUUID(), CREATED_AT.plusSeconds(offsetSeconds));
         job.schedule(CREATED_AT.plusSeconds(offsetSeconds));
+        rootTask.markRunning(CREATED_AT.plusSeconds(offsetSeconds + 1));
         job.markRunning(CREATED_AT.plusSeconds(offsetSeconds + 1));
+        rootTask.markFailed(CREATED_AT.plusSeconds(offsetSeconds + 2), "Worker lost");
         job.markFailed(CREATED_AT.plusSeconds(offsetSeconds + 2), "Worker lost");
     }
 }
