@@ -55,8 +55,8 @@ public final class Job {
 
     public void addEvalTask(Task task) {
         Objects.requireNonNull(task, "task must not be null");
-        if (status.isTerminal()) {
-            throw new IllegalStateException("a terminal job cannot accept new eval tasks");
+        if (status != JobStatus.RUNNING) {
+            throw new IllegalStateException("eval tasks can only be added while the job is running");
         }
         if (task.getType() != TaskType.EVAL) {
             throw new IllegalArgumentException("only eval tasks can be added to an existing job");
@@ -65,8 +65,12 @@ public final class Job {
             throw new IllegalArgumentException("task must belong to this job");
         }
         UUID parentTaskId = task.getParentTaskId().orElseThrow();
-        if (!tasks.containsKey(parentTaskId)) {
+        Task parentTask = tasks.get(parentTaskId);
+        if (parentTask == null) {
             throw new IllegalArgumentException("eval task parent must already belong to this job");
+        }
+        if (parentTask.getStatus() != TaskStatus.RUNNING) {
+            throw new IllegalStateException("eval task parent must be running");
         }
         if (tasks.putIfAbsent(task.getId(), task) != null) {
             throw new IllegalArgumentException("job already contains this task id");

@@ -1,0 +1,12 @@
+package rs.ac.bg.etf.kdp.common.protocol;
+
+public enum ProtocolError {
+    INVALID_MAGIC,
+    UNSUPPORTED_VERSION,
+    UNKNOWN_MESSAGE_TYPE,
+    INVALID_PAYLOAD_LENGTH,
+    TRUNCATED_FRAME,
+    INVALID_HANDSHAKE,
+    ROLE_VIOLATION,
+    CORRELATION_MISMATCH
+}

@@ -135,12 +135,17 @@ class JobTest {
     @Test
     void acceptsEvalTaskOnlyWhenItsParentBelongsToJob() {
         Job job = newJob();
+        Task root = job.getRootTask();
+        root.assignTo(UUID.randomUUID(), CREATED_AT.plusSeconds(1));
+        job.schedule(CREATED_AT.plusSeconds(1));
+        root.markRunning(CREATED_AT.plusSeconds(2));
+        job.markRunning(CREATED_AT.plusSeconds(2));
         Task evalTask = Task.eval(
                 UUID.randomUUID(),
                 job.getId(),
-                job.getRootTask().getId(),
+                root.getId(),
                 "Partial calculation",
-                CREATED_AT.plusSeconds(1));
+                CREATED_AT.plusSeconds(2));
 
         job.addEvalTask(evalTask);
 
@@ -152,7 +157,7 @@ class JobTest {
                 job.getId(),
                 UUID.randomUUID(),
                 "Invalid eval",
-                CREATED_AT.plusSeconds(1));
+                CREATED_AT.plusSeconds(2));
         assertThrows(IllegalArgumentException.class, () -> job.addEvalTask(unknownParent));
     }
 
@@ -160,14 +165,13 @@ class JobTest {
     void cannotFinishUntilRootAndAllEvalTasksAreDone() {
         Job job = newJob();
         Task root = job.getRootTask();
-        Task eval = Task.eval(
-                UUID.randomUUID(), job.getId(), root.getId(), "Eval", CREATED_AT);
-        job.addEvalTask(eval);
-
         root.assignTo(UUID.randomUUID(), CREATED_AT.plusSeconds(1));
         job.schedule(CREATED_AT.plusSeconds(1));
         root.markRunning(CREATED_AT.plusSeconds(2));
         job.markRunning(CREATED_AT.plusSeconds(2));
+        Task eval = Task.eval(
+                UUID.randomUUID(), job.getId(), root.getId(), "Eval", CREATED_AT.plusSeconds(2));
+        job.addEvalTask(eval);
         root.markDone(CREATED_AT.plusSeconds(3));
 
         assertThrows(IllegalStateException.class,
@@ -184,15 +188,20 @@ class JobTest {
     @Test
     void abortCascadesToUnfinishedTasks() {
         Job job = newJob();
+        Task root = job.getRootTask();
+        root.assignTo(UUID.randomUUID(), CREATED_AT.plusSeconds(1));
+        job.schedule(CREATED_AT.plusSeconds(1));
+        root.markRunning(CREATED_AT.plusSeconds(2));
+        job.markRunning(CREATED_AT.plusSeconds(2));
         Task eval = Task.eval(
                 UUID.randomUUID(),
                 job.getId(),
-                job.getRootTask().getId(),
+                root.getId(),
                 "Eval",
-                CREATED_AT);
+                CREATED_AT.plusSeconds(2));
         job.addEvalTask(eval);
 
-        job.abort(CREATED_AT.plusSeconds(1));
+        job.abort(CREATED_AT.plusSeconds(3));
 
         assertEquals(JobStatus.ABORTED, job.getStatus());
         assertEquals(TaskStatus.ABORTED, job.getRootTask().getStatus());
