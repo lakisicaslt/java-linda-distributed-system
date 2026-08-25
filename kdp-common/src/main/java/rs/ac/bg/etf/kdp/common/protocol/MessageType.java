@@ -28,6 +28,7 @@ public enum MessageType {
     TASK_FINISHED(206, roles(ConnectionRole.WORKER)),
     TASK_FAILED(207, roles(ConnectionRole.WORKER)),
     EXECUTE_TASK(208, roles(ConnectionRole.WORKER)),
+    CANCEL_TASK(209, roles(ConnectionRole.WORKER)),
 
     FILE_BEGIN(300, roles(ConnectionRole.CLIENT, ConnectionRole.WORKER)),
     FILE_CHUNK(301, roles(ConnectionRole.CLIENT, ConnectionRole.WORKER)),

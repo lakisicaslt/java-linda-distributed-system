@@ -4,6 +4,7 @@ import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 import rs.ac.bg.etf.kdp.Linda;
+import rs.ac.bg.etf.kdp.RemoteLinda;
 import rs.ac.bg.etf.kdp.common.domain.Job;
 import rs.ac.bg.etf.kdp.common.domain.JobSpecification;
 import rs.ac.bg.etf.kdp.common.domain.JobStatus;
@@ -157,6 +158,127 @@ class JobClientIntegrationTest {
                 .resolve("streams")
                 .resolve(job.getTasks().get(1).getId() + "-stdout.txt"),
                 StandardCharsets.UTF_8).contains("eval task completed"));
+    }
+
+    @Test
+    void retriesOnlyFailedEvalAfterItsWorkerDisconnects() throws Exception {
+        WorkerRegistry registry = new WorkerRegistry();
+        TaskScheduler scheduler = new TaskScheduler(registry);
+        ServerJobStore jobStore = new ServerJobStore(
+                temporaryDirectory.resolve("eval-retry-jobs"));
+        ServerTaskResultStore resultStore = new ServerTaskResultStore(
+                temporaryDirectory.resolve("eval-retry-results"));
+        startLindaServer(registry, scheduler, jobStore, resultStore);
+
+        Path lindaLibrary = temporaryDirectory.resolve("eval-retry-kdp-linda.jar");
+        createLindaLibrary(lindaLibrary);
+        UUID firstWorkerId = UUID.randomUUID();
+        UUID secondWorkerId = UUID.randomUUID();
+        workerClient = new WorkerClient(workerConfig(
+                server.getLocalPort(),
+                firstWorkerId,
+                temporaryDirectory.resolve("eval-retry-worker-one"),
+                lindaLibrary));
+        secondWorkerClient = new WorkerClient(workerConfig(
+                server.getLocalPort(),
+                secondWorkerId,
+                temporaryDirectory.resolve("eval-retry-worker-two"),
+                lindaLibrary));
+        workerClient.start();
+        secondWorkerClient.start();
+
+        JobClient client = new JobClient(new ClientConfig(
+                "127.0.0.1", server.getLocalPort(), 1_000, 1_000));
+        Job job = submitRecoverableEvalJob(client, jobStore);
+        waitUntilRootObservedEval(job);
+
+        TaskType failedType = disconnectEvalWorker(job, firstWorkerId, secondWorkerId);
+        assertEquals(TaskType.EVAL, failedType);
+        assertTrue(await(() -> job.getStatus() == JobStatus.FAILED));
+        assertEquals(TaskStatus.RUNNING, job.getRootTask().getStatus());
+        assertEquals(TaskStatus.FAILED, job.getTasks().get(1).getStatus());
+
+        WorkerClient replacement = new WorkerClient(workerConfig(
+                server.getLocalPort(),
+                UUID.randomUUID(),
+                temporaryDirectory.resolve("eval-retry-replacement"),
+                lindaLibrary));
+        setDisconnectedWorkerSlot(replacement);
+        replacement.start();
+        client.retryFailedJob(job.getId());
+
+        assertTrue(await(() -> job.getStatus() == JobStatus.DONE));
+        assertEquals(1, job.getRootTask().getAttemptNumber());
+        assertEquals(2, job.getTasks().get(1).getAttemptNumber());
+        assertEquals("retried eval completed", Files.readString(resultStore
+                .taskDirectory(job.getRootTask().getId())
+                .resolve("outputs")
+                .resolve("result.txt"), StandardCharsets.UTF_8));
+    }
+
+    @Test
+    void abortsRemainingEvalProcessesAndReusesWorkerCapacity() throws Exception {
+        WorkerRegistry registry = new WorkerRegistry();
+        TaskScheduler scheduler = new TaskScheduler(registry);
+        ServerJobStore jobStore = new ServerJobStore(
+                temporaryDirectory.resolve("eval-abort-jobs"));
+        ServerTaskResultStore resultStore = new ServerTaskResultStore(
+                temporaryDirectory.resolve("eval-abort-results"));
+        startLindaServer(registry, scheduler, jobStore, resultStore);
+
+        Path lindaLibrary = temporaryDirectory.resolve("eval-abort-kdp-linda.jar");
+        createLindaLibrary(lindaLibrary);
+        UUID firstWorkerId = UUID.randomUUID();
+        UUID secondWorkerId = UUID.randomUUID();
+        workerClient = new WorkerClient(workerConfig(
+                server.getLocalPort(),
+                firstWorkerId,
+                temporaryDirectory.resolve("eval-abort-worker-one"),
+                lindaLibrary));
+        secondWorkerClient = new WorkerClient(workerConfig(
+                server.getLocalPort(),
+                secondWorkerId,
+                temporaryDirectory.resolve("eval-abort-worker-two"),
+                lindaLibrary));
+        workerClient.start();
+        secondWorkerClient.start();
+
+        JobClient client = new JobClient(new ClientConfig(
+                "127.0.0.1", server.getLocalPort(), 1_000, 1_000));
+        Job job = submitRecoverableEvalJob(client, jobStore);
+        waitUntilRootObservedEval(job);
+        disconnectEvalWorker(job, firstWorkerId, secondWorkerId);
+        assertTrue(await(() -> job.getStatus() == JobStatus.FAILED));
+
+        WorkerClient survivingWorker = workerClient != null
+                ? workerClient : secondWorkerClient;
+        client.abortFailedJob(job.getId());
+
+        assertEquals(JobStatus.ABORTED, job.getStatus());
+        assertEquals(TaskStatus.ABORTED, job.getRootTask().getStatus());
+        assertEquals(TaskStatus.ABORTED, job.getTasks().get(1).getStatus());
+        assertTrue(await(() -> survivingWorker.getAssignedTaskIds().isEmpty()));
+        assertTrue(survivingWorker.isRunning());
+
+        Path simpleArchive = temporaryDirectory.resolve("after-abort-job.jar");
+        createJobArchive(simpleArchive);
+        Path input = temporaryDirectory.resolve("input.txt");
+        Files.writeString(input, "worker is reusable", StandardCharsets.UTF_8);
+        JobSpecification simpleSpecification = new JobSpecification(
+                "after-abort-job.jar",
+                List.of(),
+                List.of("result.txt"),
+                List.of("input.txt"),
+                List.of("result.txt"));
+        BatchAcceptedMessage accepted = client.submit(List.of(
+                new JobSubmission(simpleSpecification, simpleArchive, List.of(input))));
+        Job nextJob = jobStore.findJob(accepted.getJobIds().get(0)).orElseThrow();
+
+        assertTrue(await(() -> nextJob.getStatus() == JobStatus.DONE));
+        assertEquals("WORKER IS REUSABLE", Files.readString(resultStore
+                .taskDirectory(nextJob.getRootTask().getId())
+                .resolve("outputs")
+                .resolve("result.txt"), StandardCharsets.UTF_8));
     }
 
     @Test
@@ -495,6 +617,89 @@ class JobClientIntegrationTest {
         return condition.getAsBoolean();
     }
 
+    private void startLindaServer(
+            WorkerRegistry registry,
+            TaskScheduler scheduler,
+            ServerJobStore jobStore,
+            ServerTaskResultStore resultStore) throws IOException {
+        lindaHandler = new LindaSessionHandler(jobStore, scheduler);
+        server = new CentralServer(
+                new ServerConfig("127.0.0.1", 0, 10, 8, 1_000),
+                new ServerMessageRouter(
+                        Map.of(
+                                ConnectionRole.CLIENT,
+                                new ClientSessionHandler(jobStore, scheduler, resultStore),
+                                ConnectionRole.WORKER,
+                                new WorkerSessionHandler(registry, scheduler, resultStore),
+                                ConnectionRole.LINDA,
+                                lindaHandler),
+                        (connection, frame) -> connection.send(frame.reply(
+                                MessageType.ERROR, new byte[0]))));
+        server.start();
+    }
+
+    private Job submitRecoverableEvalJob(
+            JobClient client,
+            ServerJobStore jobStore) throws Exception {
+        Path archive = temporaryDirectory.resolve("recoverable-eval-job.jar");
+        createJobArchive(
+                archive,
+                RecoverableEvalExecutionTestProgram.class,
+                RecoverableEvalTestRunnable.class);
+        JobSpecification specification = new JobSpecification(
+                archive.getFileName().toString(),
+                List.of(),
+                List.of("result.txt"),
+                List.of(),
+                List.of("result.txt"));
+        BatchAcceptedMessage accepted = client.submit(List.of(
+                new JobSubmission(specification, archive, List.of())));
+        return jobStore.findJob(accepted.getJobIds().get(0)).orElseThrow();
+    }
+
+    private void waitUntilRootObservedEval(Job job) throws InterruptedException {
+        assertTrue(await(() -> job.getTasks().size() == 2
+                && job.getRootTask().getStatus() == TaskStatus.RUNNING
+                && job.getTasks().get(1).getStatus() == TaskStatus.RUNNING));
+        RemoteLinda observer = new RemoteLinda(
+                "127.0.0.1",
+                server.getLocalPort(),
+                job.getBatchId(),
+                job.getRootTask().getId());
+        assertTrue(await(() -> observer.rdp(new String[]{"root-observed-first-start"})));
+    }
+
+    private TaskType disconnectEvalWorker(
+            Job job,
+            UUID firstWorkerId,
+            UUID secondWorkerId) {
+        var evalTask = job.getTasks().stream()
+                .filter(task -> task.getType() == TaskType.EVAL)
+                .findFirst()
+                .orElseThrow();
+        UUID evalWorkerId = evalTask.getAssignedWorkerId().orElseThrow();
+        if (evalWorkerId.equals(firstWorkerId)) {
+            workerClient.close();
+            workerClient = null;
+        } else if (evalWorkerId.equals(secondWorkerId)) {
+            secondWorkerClient.close();
+            secondWorkerClient = null;
+        } else {
+            throw new IllegalStateException("Eval task was assigned to an unknown worker");
+        }
+        return evalTask.getType();
+    }
+
+    private void setDisconnectedWorkerSlot(WorkerClient replacement) {
+        if (workerClient == null) {
+            workerClient = replacement;
+        } else if (secondWorkerClient == null) {
+            secondWorkerClient = replacement;
+        } else {
+            throw new IllegalStateException("Both original workers are still connected");
+        }
+    }
+
     private static void createJobArchive(Path target) throws IOException {
         createJobArchive(target, ClientExecutionTestProgram.class);
     }
@@ -503,10 +708,18 @@ class JobClientIntegrationTest {
             int serverPort,
             Path workDirectory,
             Path lindaLibrary) {
+        return workerConfig(serverPort, UUID.randomUUID(), workDirectory, lindaLibrary);
+    }
+
+    private static WorkerConfig workerConfig(
+            int serverPort,
+            UUID workerId,
+            Path workDirectory,
+            Path lindaLibrary) {
         return new WorkerConfig(
                 "127.0.0.1",
                 serverPort,
-                UUID.randomUUID(),
+                workerId,
                 1,
                 1_000,
                 1_000,

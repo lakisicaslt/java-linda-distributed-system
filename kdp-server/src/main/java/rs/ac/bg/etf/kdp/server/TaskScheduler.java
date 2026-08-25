@@ -56,6 +56,7 @@ public final class TaskScheduler {
     private final Set<UUID> preparedTransfersStarted = new HashSet<>();
     private final Map<UUID, Task> pendingFileTransfers = new HashMap<>();
     private final Set<UUID> acknowledgedFileTransfers = new HashSet<>();
+    private final Set<UUID> cancelledFileTransfers = new HashSet<>();
 
     public TaskScheduler(WorkerRegistry workerRegistry) {
         this(workerRegistry, Clock.systemUTC(), JobStatusListener.NONE);
@@ -162,6 +163,12 @@ public final class TaskScheduler {
         UUID taskId = taskCodec.decodeTaskReference(frame.getPayload());
         Task task = pendingAcceptances.get(frame.getRequestId());
         if (task == null) {
+            Task cancelledTask = tasks.get(taskId);
+            if (cancelledTask != null
+                    && cancelledTask.getStatus() == TaskStatus.ABORTED
+                    && isAssignedTo(connection, cancelledTask)) {
+                return taskId;
+            }
             throw new ProtocolException(
                     ProtocolError.CORRELATION_MISMATCH,
                     "Task acceptance does not match a pending assignment");
@@ -191,6 +198,10 @@ public final class TaskScheduler {
         Objects.requireNonNull(taskId, "task id must not be null");
         PreparedExecution prepared = preparedExecutions.get(taskId);
         if (prepared == null) {
+            return;
+        }
+        Task task = tasks.get(taskId);
+        if (task != null && task.getStatus() == TaskStatus.ABORTED) {
             return;
         }
         if (!acceptedTaskIds.contains(taskId)) {
@@ -270,14 +281,24 @@ public final class TaskScheduler {
         dispatchAvailableTasks();
     }
 
-    public synchronized void abortFailedJob(Job job) {
+    public synchronized void abortFailedJob(Job job) throws IOException {
         Job scheduledJob = requireScheduledJob(job);
         if (scheduledJob.getStatus() != JobStatus.FAILED) {
             throw new IllegalStateException("only a failed job can be aborted");
         }
+        List<Task> activeTasks = scheduledJob.getTasks().stream()
+                .filter(task -> task.getStatus() == TaskStatus.SCHEDULED
+                        || task.getStatus() == TaskStatus.RUNNING)
+                .toList();
+        for (Task task : activeTasks) {
+            cancelActiveTask(task);
+        }
+
         scheduledJob.abort(clock.instant());
         recordStatus(scheduledJob, scheduledJob.getRootTask());
         scheduledJob.getTasks().forEach(this::clearFailedAttempt);
+        readyTasks.removeIf(task -> task.getJobId().equals(scheduledJob.getId()));
+        dispatchAvailableTasks();
     }
 
     public synchronized void retryFailedJob(Job job) throws IOException {
@@ -305,6 +326,9 @@ public final class TaskScheduler {
             ProtocolFrame frame) throws ProtocolException {
         UUID taskId = taskCodec.decodeTaskReference(frame.getPayload());
         Task task = assignedTask(connection, taskId);
+        if (task.getStatus() == TaskStatus.ABORTED) {
+            return;
+        }
         requireAccepted(taskId);
         if (!executionRequestedTaskIds.contains(taskId)) {
             throw new ProtocolException(
@@ -374,6 +398,9 @@ public final class TaskScheduler {
             ProtocolFrame frame) throws IOException {
         UUID taskId = taskCodec.decodeTaskReference(frame.getPayload());
         Task task = assignedTask(connection, taskId);
+        if (task.getStatus() == TaskStatus.ABORTED) {
+            return;
+        }
         requireAccepted(taskId);
         Instant occurredAt = clock.instant();
         task.markDone(occurredAt);
@@ -387,6 +414,9 @@ public final class TaskScheduler {
             ProtocolFrame frame) throws IOException {
         TaskFailureMessage failure = taskCodec.decodeFailure(frame.getPayload());
         Task task = assignedTask(connection, failure.getTaskId());
+        if (task.getStatus() == TaskStatus.ABORTED) {
+            return;
+        }
         requireAccepted(task.getId());
         Instant occurredAt = clock.instant();
         task.markFailed(occurredAt, failure.getReason());
@@ -400,6 +430,10 @@ public final class TaskScheduler {
             FileTransferMetadata metadata) throws ProtocolException {
         Objects.requireNonNull(metadata, "file metadata must not be null");
         Task task = assignedTask(connection, metadata.getOwnerId());
+        if (task.getStatus() == TaskStatus.ABORTED) {
+            validateResultKind(task, metadata);
+            return;
+        }
         requireAccepted(task.getId());
         if (task.getStatus() != TaskStatus.RUNNING
                 || !executionRequestedTaskIds.contains(task.getId())) {
@@ -407,20 +441,7 @@ public final class TaskScheduler {
                     ProtocolError.INVALID_MESSAGE_PAYLOAD,
                     "Worker can send results only for a running task");
         }
-        if (metadata.getKind() == TransferFileKind.OUTPUT) {
-            JobSpecification specification = executionSpecifications.get(task.getId());
-            if (specification == null
-                    || !specification.getOutputFileNames().contains(metadata.getFileName())) {
-                throw new ProtocolException(
-                        ProtocolError.INVALID_MESSAGE_PAYLOAD,
-                        "Worker sent an undeclared output file");
-            }
-        } else if (metadata.getKind() != TransferFileKind.STANDARD_OUTPUT
-                && metadata.getKind() != TransferFileKind.STANDARD_ERROR) {
-            throw new ProtocolException(
-                    ProtocolError.INVALID_MESSAGE_PAYLOAD,
-                    "Worker can send only task output files and captured streams");
-        }
+        validateResultKind(task, metadata);
     }
 
     public synchronized UUID sendFile(
@@ -464,6 +485,9 @@ public final class TaskScheduler {
         fileCodec.verifyAcknowledgement(frame, frame.getRequestId());
         Task task = pendingFileTransfers.get(frame.getRequestId());
         if (task == null) {
+            if (cancelledFileTransfers.remove(frame.getRequestId())) {
+                return;
+            }
             throw new ProtocolException(
                     ProtocolError.CORRELATION_MISMATCH,
                     "File acknowledgement does not match a pending transfer");
@@ -590,8 +614,60 @@ public final class TaskScheduler {
         executionRequestedTaskIds.remove(task.getId());
         executionSpecifications.remove(task.getId());
         preparedTransfersStarted.remove(task.getId());
-        pendingFileTransfers.entrySet().removeIf(
-                entry -> entry.getValue().getId().equals(task.getId()));
+        rememberAndRemovePendingTransfers(task.getId());
+    }
+
+    private void cancelActiveTask(Task task) {
+        task.getAssignedWorkerId()
+                .flatMap(workerRegistry::findConnection)
+                .ifPresent(connection -> {
+                    try {
+                        connection.send(ProtocolFrame.request(
+                                MessageType.CANCEL_TASK,
+                                taskCodec.encodeTaskReference(task.getId())));
+                    } catch (IOException ignored) {
+                        // A disconnected worker will be removed by its session handler.
+                    }
+                });
+        workerRegistry.releaseTask(task);
+    }
+
+    private void rememberAndRemovePendingTransfers(UUID taskId) {
+        pendingFileTransfers.entrySet().removeIf(entry -> {
+            if (!entry.getValue().getId().equals(taskId)) {
+                return false;
+            }
+            cancelledFileTransfers.add(entry.getKey());
+            return true;
+        });
+    }
+
+    private boolean isAssignedTo(ServerConnection connection, Task task) {
+        return workerRegistry.findWorkerId(connection)
+                .flatMap(workerId -> task.getAssignedWorkerId().filter(workerId::equals))
+                .isPresent();
+    }
+
+    private void validateResultKind(Task task, FileTransferMetadata metadata)
+            throws ProtocolException {
+        if (metadata.getKind() == TransferFileKind.OUTPUT) {
+            JobSpecification specification = executionSpecifications.get(task.getId());
+            if (specification == null) {
+                PreparedExecution prepared = preparedExecutions.get(task.getId());
+                specification = prepared == null ? null : prepared.specification;
+            }
+            if (specification == null
+                    || !specification.getOutputFileNames().contains(metadata.getFileName())) {
+                throw new ProtocolException(
+                        ProtocolError.INVALID_MESSAGE_PAYLOAD,
+                        "Worker sent an undeclared output file");
+            }
+        } else if (metadata.getKind() != TransferFileKind.STANDARD_OUTPUT
+                && metadata.getKind() != TransferFileKind.STANDARD_ERROR) {
+            throw new ProtocolException(
+                    ProtocolError.INVALID_MESSAGE_PAYLOAD,
+                    "Worker can send only task output files and captured streams");
+        }
     }
 
     private Job requireScheduledJob(Job job) {

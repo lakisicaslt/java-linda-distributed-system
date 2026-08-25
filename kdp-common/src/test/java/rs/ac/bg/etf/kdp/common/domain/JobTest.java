@@ -94,6 +94,35 @@ class JobTest {
     }
 
     @Test
+    void retryKeepsJobRunningWhileAnotherTaskIsStillActive() {
+        Job job = newJob();
+        Task root = job.getRootTask();
+        Instant scheduledAt = CREATED_AT.plusSeconds(1);
+        Instant startedAt = CREATED_AT.plusSeconds(2);
+        root.assignTo(UUID.randomUUID(), scheduledAt);
+        job.schedule(scheduledAt);
+        root.markRunning(startedAt);
+        job.markRunning(startedAt);
+        Task eval = Task.eval(
+                UUID.randomUUID(), job.getId(), root.getId(), "Eval", startedAt);
+        job.addEvalTask(eval);
+        eval.assignTo(UUID.randomUUID(), CREATED_AT.plusSeconds(3));
+        eval.markRunning(CREATED_AT.plusSeconds(4));
+        eval.markFailed(CREATED_AT.plusSeconds(5), "Worker disconnected");
+        job.markFailed(CREATED_AT.plusSeconds(5), "Worker disconnected");
+
+        job.retry(CREATED_AT.plusSeconds(6));
+
+        assertEquals(JobStatus.RUNNING, job.getStatus());
+        assertEquals(TaskStatus.RUNNING, root.getStatus());
+        assertEquals(TaskStatus.READY, eval.getStatus());
+        assertEquals(scheduledAt, job.getScheduledAt());
+        assertEquals(startedAt, job.getStartedAt());
+        assertNull(job.getFinishedAt());
+        assertNull(job.getFailureReason());
+    }
+
+    @Test
     void rejectsBlankFailureReason() {
         Job job = newJob();
         job.getRootTask().assignTo(UUID.randomUUID(), CREATED_AT.plusSeconds(1));

@@ -187,6 +187,13 @@ zadatak; u tom slučaju iza njega se nalaze dužina i bajtovi serijalizovanog
 `Runnable` objekta. Server ne šalje ovu poruku dok postoji prenos datoteke za taj
 zadatak koji worker još nije potvrdio.
 
+Ako korisnik posle greške izabere odustajanje od celog posla, server za svaki
+preostali aktivan zadatak šalje `CANCEL_TASK`. Payload je Task ID od 16 bajtova.
+Worker uklanja zadatak iz svojih rezervacija, prekida nit koja ga vodi i prinudno
+zaustavlja zaseban korisnički Java proces. Poruka nema odgovor. Zakašnjeli status
+ili prenos koji je već bio započet ne menja konačan status `ABORTED` i ne prekida
+vezu sa workerom.
+
 ## Linda prostor torki
 
 Svaki poziv Linda operacije koristi posebnu LINDA konekciju. Posle standardnog

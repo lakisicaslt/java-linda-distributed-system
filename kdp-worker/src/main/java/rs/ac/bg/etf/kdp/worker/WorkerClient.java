@@ -43,6 +43,8 @@ import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.ExecutionException;
 import java.util.concurrent.Executors;
+import java.util.concurrent.Future;
+import java.util.concurrent.FutureTask;
 import java.util.concurrent.RejectedExecutionException;
 import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.TimeUnit;
@@ -70,8 +72,11 @@ public final class WorkerClient implements AutoCloseable {
     private final CountDownLatch stopped = new CountDownLatch(1);
     private final Set<UUID> assignedTaskIds = ConcurrentHashMap.newKeySet();
     private final Set<UUID> executingTaskIds = ConcurrentHashMap.newKeySet();
+    private final Set<UUID> cancelledTaskIds = ConcurrentHashMap.newKeySet();
+    private final Map<UUID, Future<?>> executionTasks = new ConcurrentHashMap<>();
     private final Map<UUID, CompletableFuture<Void>> pendingResultTransfers =
             new ConcurrentHashMap<>();
+    private final Set<UUID> cancelledResultTransfers = ConcurrentHashMap.newKeySet();
     private final WorkerFileStore fileStore;
     private final JavaTaskRunner taskRunner = new JavaTaskRunner();
 
@@ -238,6 +243,8 @@ public final class WorkerClient implements AutoCloseable {
                     acceptAssignment(frame);
                 } else if (frame.getType() == MessageType.EXECUTE_TASK) {
                     executeTask(frame);
+                } else if (frame.getType() == MessageType.CANCEL_TASK) {
+                    cancelTask(frame);
                 } else if (frame.getType() == MessageType.FILE_ACKNOWLEDGED) {
                     acknowledgeResultFile(frame);
                 } else if (frame.getType() == MessageType.FILE_BEGIN
@@ -307,9 +314,26 @@ public final class WorkerClient implements AutoCloseable {
                     "Task execution has already started");
         }
 
+        FutureTask<Void> executionTask = new FutureTask<>(() -> {
+            runTask(execution);
+            return null;
+        }) {
+            @Override
+            public void run() {
+                try {
+                    super.run();
+                } finally {
+                    executionTasks.remove(taskId, this);
+                    executingTaskIds.remove(taskId);
+                    cancelledTaskIds.remove(taskId);
+                }
+            }
+        };
+        executionTasks.put(taskId, executionTask);
         try {
-            taskExecutor.submit(() -> runTask(execution));
+            taskExecutor.execute(executionTask);
         } catch (RejectedExecutionException exception) {
+            executionTasks.remove(taskId, executionTask);
             executingTaskIds.remove(taskId);
             throw new ProtocolException(
                     ProtocolError.INVALID_MESSAGE_PAYLOAD,
@@ -321,6 +345,9 @@ public final class WorkerClient implements AutoCloseable {
     private void runTask(TaskExecutionMessage execution) {
         UUID taskId = execution.getTaskId();
         try {
+            if (cancelledTaskIds.contains(taskId)) {
+                return;
+            }
             reportTaskStarted(taskId);
             LindaConnectionInfo lindaConnection = new LindaConnectionInfo(
                     config.getServerHost(),
@@ -343,7 +370,13 @@ public final class WorkerClient implements AutoCloseable {
                         config.getLindaLibrary(),
                         lindaConnection);
             }
+            if (cancelledTaskIds.contains(taskId)) {
+                return;
+            }
             sendTaskResults(taskId, result);
+            if (cancelledTaskIds.contains(taskId)) {
+                return;
+            }
             if (result.isSuccessful()) {
                 reportTaskFinished(taskId);
             } else {
@@ -351,15 +384,31 @@ public final class WorkerClient implements AutoCloseable {
             }
         } catch (InterruptedException exception) {
             Thread.currentThread().interrupt();
-            reportExecutionFailure(taskId, "Task execution was interrupted", exception);
+            if (!cancelledTaskIds.contains(taskId)) {
+                reportExecutionFailure(taskId, "Task execution was interrupted", exception);
+            }
         } catch (IOException | RuntimeException exception) {
             String reason = exception.getMessage();
             if (reason == null || reason.isBlank()) {
                 reason = exception.getClass().getSimpleName();
             }
-            reportExecutionFailure(taskId, reason, exception);
-        } finally {
+            if (!cancelledTaskIds.contains(taskId)) {
+                reportExecutionFailure(taskId, reason, exception);
+            }
+        }
+    }
+
+    private void cancelTask(ProtocolFrame frame) throws ProtocolException {
+        UUID taskId = taskCodec.decodeTaskReference(frame.getPayload());
+        cancelledTaskIds.add(taskId);
+        assignedTaskIds.remove(taskId);
+
+        Future<?> executionTask = executionTasks.get(taskId);
+        if (executionTask != null) {
+            executionTask.cancel(true);
+        } else {
             executingTaskIds.remove(taskId);
+            cancelledTaskIds.remove(taskId);
         }
     }
 
@@ -432,6 +481,9 @@ public final class WorkerClient implements AutoCloseable {
             throw new IOException("Result transfer acknowledgement failed", cause);
         } finally {
             pendingResultTransfers.remove(transferId);
+            if (cancelledTaskIds.contains(taskId)) {
+                cancelledResultTransfers.add(transferId);
+            }
         }
     }
 
@@ -439,6 +491,9 @@ public final class WorkerClient implements AutoCloseable {
         CompletableFuture<Void> acknowledgement = pendingResultTransfers.get(
                 frame.getRequestId());
         if (acknowledgement == null) {
+            if (cancelledResultTransfers.remove(frame.getRequestId())) {
+                return;
+            }
             throw new ProtocolException(
                     ProtocolError.CORRELATION_MISMATCH,
                     "File acknowledgement does not match a result transfer");
@@ -499,6 +554,9 @@ public final class WorkerClient implements AutoCloseable {
         pendingResultTransfers.values().forEach(
                 acknowledgement -> acknowledgement.completeExceptionally(closedException));
         pendingResultTransfers.clear();
+        cancelledResultTransfers.clear();
+        executionTasks.values().forEach(task -> task.cancel(true));
+        executionTasks.clear();
         Socket connectedSocket = socket;
         socket = null;
         closeSocket(connectedSocket);

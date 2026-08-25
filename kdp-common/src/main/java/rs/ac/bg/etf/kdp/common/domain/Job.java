@@ -104,11 +104,26 @@ public final class Job {
     }
 
     public void retry(Instant occurredAt) {
+        boolean hasRunningTask = tasks.values().stream()
+                .anyMatch(task -> task.getStatus() == TaskStatus.RUNNING);
+        boolean hasScheduledTask = tasks.values().stream()
+                .anyMatch(task -> task.getStatus() == TaskStatus.SCHEDULED);
         transitionTo(JobStatus.READY, occurredAt);
         tasks.values().stream()
                 .filter(task -> task.getStatus() == TaskStatus.FAILED)
                 .forEach(task -> task.retry(occurredAt));
-        clearExecutionDetails();
+        finishedAt = null;
+        failureReason = null;
+        if (hasRunningTask || hasScheduledTask) {
+            transitionTo(JobStatus.SCHEDULED, occurredAt);
+        }
+        if (hasRunningTask) {
+            transitionTo(JobStatus.RUNNING, occurredAt);
+        }
+        if (!hasRunningTask && !hasScheduledTask) {
+            scheduledAt = null;
+            startedAt = null;
+        }
     }
 
     public void abort(Instant occurredAt) {
@@ -195,13 +210,6 @@ public final class Job {
         JobStatusTransitions.requireValidTransition(status, nextStatus);
         status = nextStatus;
         lastStatusChangedAt = validatedTime;
-    }
-
-    private void clearExecutionDetails() {
-        scheduledAt = null;
-        startedAt = null;
-        finishedAt = null;
-        failureReason = null;
     }
 
     private static String requireNonBlank(String value, String fieldName) {

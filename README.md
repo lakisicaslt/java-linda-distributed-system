@@ -91,7 +91,9 @@ Ako se worker isključi tokom izvršavanja, posao dobija status `FAILED` i razlo
 `Worker disconnected`. Klijent tada bira dalji tok pozivom `abortFailedJob` ili
 `retryFailedJob`. Prva odluka postavlja posao na `ABORTED`, dok druga vraća prekinuti
 zadatak u `READY`; scheduler ga ne ponavlja samostalno i novi pokušaj dobija sledeći
-redni broj.
+redni broj. Ako posao ima više aktivnih `eval` zadataka, ponavlja se samo neuspeli
+deo, dok ostali nastavljaju rad. Odluka `abort` šalje aktivnim workerima zahtev za
+prekid, gasi njihove korisničke Java procese i oslobađa rezervisani kapacitet.
 
 Centralni server vodi evidenciju životnog ciklusa poslova u fajlu
 `server-data/server.log`. Za svaku promenu statusa upisuju se vreme prijema, Job ID,
