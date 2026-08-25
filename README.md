@@ -51,6 +51,13 @@ Worker ih upisuje direktno na disk u direktorijum zadatka i potvrđuje završen 
 Nepotpuna privremena datoteka briše se ako se prenos prekine, tako da veliki fajlovi
 ne ostaju ni u memoriji ni kao neupotrebljivi privremeni resursi.
 
+Modul `kdp-runner` može da pokrene primljeni JAR kao zaseban Java proces. Pre
+pokretanja proverava JAR, Linda biblioteku i sve deklarisane ulazne datoteke, zatim
+prosleđuje JVM i programske argumente. Putanja do Linda biblioteke dodaje se kao
+poslednji programski argument. `stdout` i `stderr` čuvaju se odvojeno u direktorijumu
+`.kdp`, a izlazni kod procesa određuje da li je izvršavanje bilo uspešno. Uspešan
+proces mora da napravi sve izlazne datoteke koje je korisnik naveo.
+
 Ručna provera iz IntelliJ IDEA:
 
 1. Pokrenuti `rs.ac.bg.etf.kdp.server.ServerMain` iz modula `kdp-server`.
