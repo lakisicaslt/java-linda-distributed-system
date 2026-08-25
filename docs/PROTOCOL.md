@@ -66,6 +66,22 @@ Ako nema slobodnog workera, posao ostaje u statusu `READY`. Nakon svih potvrda
 klijent može da zatvori konekciju, dok server zadržava posao i njegove identifikatore
 za izvršavanje i kasnije upite.
 
+## Upit statusa
+
+Klijent može u novoj CLIENT sesiji da pošalje `GET_BATCH_STATUS`. Payload je Batch
+ID od 16 bajtova. Server odgovara porukom `BATCH_STATUS` sa istim request ID-jem.
+Odgovor sadrži Batch ID, broj poslova i za svaki posao:
+
+| Polje | Zapis |
+|---|---|
+| Job ID | UUID, 16 B |
+| Status | `READY`, `SCHEDULED`, `RUNNING`, `DONE`, `FAILED` ili `ABORTED` |
+| Postoji razlog greške | `boolean`, 1 B |
+| Razlog greške | dužina `int` i UTF-8 tekst, samo za `FAILED` |
+
+Statusni upit ne zavisi od konekcije kojom je posao predat. Klijentu je dovoljan
+Batch ID koji je dobio u poruci `BATCH_ACCEPTED`.
+
 ## Registracija radne stanice
 
 WORKER sesija odmah nakon handshake-a šalje `REGISTER_WORKER`. Payload redom sadrži:

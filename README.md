@@ -75,6 +75,11 @@ njegov korenski zadatak, server mu šalje sačuvani JAR i ulaze, čeka potvrdu s
 fajla i tek zatim šalje `EXECUTE_TASK`. Statusi korenskog zadatka istovremeno menjaju
 status posla kroz `READY`, `SCHEDULED`, `RUNNING`, `DONE` ili `FAILED`.
 
+Posle predaje klijent ne mora da ostane povezan. `JobClient` može kasnije da otvori
+novu CLIENT sesiju i pomoću sačuvanog Batch ID-ja zatraži trenutni status svih
+poslova iz te grupe. Odgovor sadrži Job ID, status i razlog greške za `FAILED`
+posao, pa ponovno povezivanje ne zavisi od prethodne TCP konekcije.
+
 Ručna provera iz IntelliJ IDEA:
 
 1. Pokrenuti `rs.ac.bg.etf.kdp.server.ServerMain` iz modula `kdp-server`.

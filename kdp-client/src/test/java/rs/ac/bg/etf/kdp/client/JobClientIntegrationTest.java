@@ -7,6 +7,7 @@ import rs.ac.bg.etf.kdp.common.domain.Job;
 import rs.ac.bg.etf.kdp.common.domain.JobSpecification;
 import rs.ac.bg.etf.kdp.common.domain.JobStatus;
 import rs.ac.bg.etf.kdp.common.protocol.BatchAcceptedMessage;
+import rs.ac.bg.etf.kdp.common.protocol.BatchStatusMessage;
 import rs.ac.bg.etf.kdp.common.protocol.ConnectionRole;
 import rs.ac.bg.etf.kdp.common.protocol.MessageType;
 import rs.ac.bg.etf.kdp.server.CentralServer;
@@ -102,6 +103,12 @@ class JobClientIntegrationTest {
         assertArrayEquals(archiveContent, Files.readAllBytes(store.archivePath(storedJob.getId())));
         assertEquals("42", Files.readString(store.inputPath(storedJob.getId(), "input.txt")));
         assertEquals(1, scheduler.getReadyTaskCount());
+
+        JobClient reconnectedClient = new JobClient(new ClientConfig(
+                "127.0.0.1", server.getLocalPort(), 1_000, 1_000));
+        BatchStatusMessage status = reconnectedClient.getBatchStatus(accepted.getBatchId());
+        assertEquals(JobStatus.READY,
+                status.findJob(storedJob.getId()).orElseThrow().getStatus());
     }
 
     @Test
@@ -167,6 +174,12 @@ class JobClientIntegrationTest {
         assertTrue(Files.readString(
                 resultDirectory.resolve("streams").resolve("stderr.txt"))
                 .contains("client end-to-end test"));
+
+        JobClient reconnectedClient = new JobClient(new ClientConfig(
+                "127.0.0.1", server.getLocalPort(), 1_000, 1_000));
+        BatchStatusMessage status = reconnectedClient.getBatchStatus(accepted.getBatchId());
+        assertEquals(JobStatus.DONE,
+                status.findJob(job.getId()).orElseThrow().getStatus());
     }
 
     @Test

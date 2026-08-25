@@ -1,6 +1,8 @@
 package rs.ac.bg.etf.kdp.client;
 
 import rs.ac.bg.etf.kdp.common.protocol.BatchAcceptedMessage;
+import rs.ac.bg.etf.kdp.common.protocol.BatchStatusMessage;
+import rs.ac.bg.etf.kdp.common.protocol.BatchStatusProtocolCodec;
 import rs.ac.bg.etf.kdp.common.protocol.BatchSubmissionMessage;
 import rs.ac.bg.etf.kdp.common.protocol.BatchSubmissionProtocolCodec;
 import rs.ac.bg.etf.kdp.common.protocol.ConnectionRole;
@@ -34,6 +36,7 @@ public final class JobClient {
     private final ProtocolHandshake handshake = new ProtocolHandshake();
     private final BatchSubmissionProtocolCodec submissionCodec =
             new BatchSubmissionProtocolCodec();
+    private final BatchStatusProtocolCodec statusCodec = new BatchStatusProtocolCodec();
     private final FileTransferSender fileSender = new FileTransferSender();
     private final FileTransferProtocolCodec fileCodec = new FileTransferProtocolCodec();
 
@@ -65,6 +68,34 @@ public final class JobClient {
                 sendJobFiles(accepted.getJobIds().get(index), jobs.get(index), input, output);
             }
             return accepted;
+        }
+    }
+
+    public BatchStatusMessage getBatchStatus(UUID batchId) throws IOException {
+        Objects.requireNonNull(batchId, "batch id must not be null");
+        try (Socket socket = ProtocolSockets.connect(
+                config.getServerHost(),
+                config.getServerPort(),
+                config.getConnectTimeoutMillis(),
+                config.getHandshakeTimeoutMillis())) {
+            InputStream input = socket.getInputStream();
+            OutputStream output = socket.getOutputStream();
+            performHandshake(input, output);
+            socket.setSoTimeout(0);
+
+            ProtocolFrame request = ProtocolFrame.request(
+                    MessageType.GET_BATCH_STATUS,
+                    statusCodec.encodeBatchReference(batchId));
+            frameCodec.write(output, request);
+            ProtocolFrame response = frameCodec.read(input);
+            requireResponse(response, MessageType.BATCH_STATUS, request.getRequestId());
+            BatchStatusMessage status = statusCodec.decodeStatus(response.getPayload());
+            if (!status.getBatchId().equals(batchId)) {
+                throw new ProtocolException(
+                        ProtocolError.CORRELATION_MISMATCH,
+                        "Server returned status for a different batch");
+            }
+            return status;
         }
     }
 
