@@ -104,20 +104,24 @@ public final class ClientFrame extends JFrame {
         content.setBorder(BorderFactory.createEmptyBorder(18, 22, 20, 22));
         content.add(createHeader(), BorderLayout.NORTH);
 
-        JPanel steps = new JPanel();
-        steps.setLayout(new javax.swing.BoxLayout(steps, javax.swing.BoxLayout.Y_AXIS));
-        steps.add(createConnectionPanel());
-        steps.add(javax.swing.Box.createVerticalStrut(12));
-        steps.add(createSubmissionPanel());
-        steps.add(javax.swing.Box.createVerticalStrut(12));
-        steps.add(createStatusPanel());
-        steps.add(javax.swing.Box.createVerticalStrut(12));
-        steps.add(createResultPanel());
-        content.add(new JScrollPane(
-                steps,
-                JScrollPane.VERTICAL_SCROLLBAR_AS_NEEDED,
-                JScrollPane.HORIZONTAL_SCROLLBAR_NEVER), BorderLayout.CENTER);
+        JPanel workspace = new JPanel(new BorderLayout(0, 12));
+        workspace.add(createConnectionPanel(), BorderLayout.NORTH);
+
+        JTabbedPane workflowTabs = new JTabbedPane();
+        workflowTabs.addTab("Slanje poslova", createSubmissionPanel());
+        workflowTabs.addTab("Praćenje i rezultati", createTrackingPanel());
+        workspace.add(workflowTabs, BorderLayout.CENTER);
+
+        content.add(workspace, BorderLayout.CENTER);
         return content;
+    }
+
+    private JPanel createTrackingPanel() {
+        JPanel panel = new JPanel(new BorderLayout(0, 12));
+        panel.setBorder(BorderFactory.createEmptyBorder(8, 8, 8, 8));
+        panel.add(createStatusPanel(), BorderLayout.CENTER);
+        panel.add(createResultPanel(), BorderLayout.SOUTH);
+        return panel;
     }
 
     private JPanel createHeader() {

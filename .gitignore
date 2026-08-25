@@ -11,6 +11,7 @@ target/
 client-data/
 server-data/
 worker-data/
+worker-work/
 
 # Temporary files and logs
 tmp/
