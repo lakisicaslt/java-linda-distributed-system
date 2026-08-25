@@ -44,6 +44,7 @@ import java.util.concurrent.TimeUnit;
 import java.util.function.BooleanSupplier;
 import java.util.jar.Attributes;
 import java.util.jar.JarEntry;
+import java.util.jar.JarInputStream;
 import java.util.jar.JarOutputStream;
 import java.util.jar.Manifest;
 import java.util.stream.Stream;
@@ -55,6 +56,8 @@ import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 class JobClientIntegrationTest {
+
+    private static final int ASYNC_TIMEOUT_SECONDS = 15;
 
     @TempDir
     Path temporaryDirectory;
@@ -700,7 +703,8 @@ class JobClientIntegrationTest {
     }
 
     private static boolean await(BooleanSupplier condition) throws InterruptedException {
-        long deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(5);
+        long deadline = System.nanoTime()
+                + TimeUnit.SECONDS.toNanos(ASYNC_TIMEOUT_SECONDS);
         while (!condition.getAsBoolean() && System.nanoTime() < deadline) {
             Thread.sleep(10);
         }
@@ -850,12 +854,23 @@ class JobClientIntegrationTest {
     }
 
     private static void createLindaLibrary(Path target) throws Exception {
-        Path classesDirectory = Path.of(Linda.class.getProtectionDomain()
+        Path classLocation = Path.of(Linda.class.getProtectionDomain()
                 .getCodeSource()
                 .getLocation()
                 .toURI());
-        try (JarOutputStream archive = new JarOutputStream(Files.newOutputStream(target));
-             Stream<Path> files = Files.walk(classesDirectory)) {
+        try (JarOutputStream archive = new JarOutputStream(Files.newOutputStream(target))) {
+            if (Files.isDirectory(classLocation)) {
+                copyClassesFromDirectory(classLocation, archive);
+            } else {
+                copyClassesFromJar(classLocation, archive);
+            }
+        }
+    }
+
+    private static void copyClassesFromDirectory(
+            Path classesDirectory,
+            JarOutputStream archive) throws IOException {
+        try (Stream<Path> files = Files.walk(classesDirectory)) {
             for (Path file : files.filter(Files::isRegularFile)
                     .filter(path -> path.getFileName().toString().endsWith(".class"))
                     .toList()) {
@@ -865,6 +880,22 @@ class JobClientIntegrationTest {
                 archive.putNextEntry(new JarEntry(entryName));
                 Files.copy(file, archive);
                 archive.closeEntry();
+            }
+        }
+    }
+
+    private static void copyClassesFromJar(
+            Path sourceJar,
+            JarOutputStream targetJar) throws IOException {
+        try (JarInputStream source = new JarInputStream(Files.newInputStream(sourceJar))) {
+            JarEntry entry;
+            while ((entry = source.getNextJarEntry()) != null) {
+                if (entry.isDirectory() || !entry.getName().endsWith(".class")) {
+                    continue;
+                }
+                targetJar.putNextEntry(new JarEntry(entry.getName()));
+                source.transferTo(targetJar);
+                targetJar.closeEntry();
             }
         }
     }

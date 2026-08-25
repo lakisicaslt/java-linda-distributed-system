@@ -129,6 +129,7 @@ public final class JavaTaskRunner {
             exitCode = process.waitFor();
         } catch (InterruptedException exception) {
             process.destroyForcibly();
+            process.onExit().join();
             Thread.currentThread().interrupt();
             throw exception;
         }

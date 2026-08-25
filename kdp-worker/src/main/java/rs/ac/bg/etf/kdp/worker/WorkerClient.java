@@ -560,8 +560,22 @@ public final class WorkerClient implements AutoCloseable {
         Socket connectedSocket = socket;
         socket = null;
         closeSocket(connectedSocket);
+        awaitTaskExecutor(executionExecutor);
         fileStore.close();
         stopped.countDown();
+    }
+
+    private static void awaitTaskExecutor(ExecutorService executor) {
+        if (executor == null || Thread.currentThread().getName().startsWith("kdp-worker-task")) {
+            return;
+        }
+        try {
+            if (!executor.awaitTermination(5, TimeUnit.SECONDS)) {
+                LOGGER.warning("Worker tasks did not stop within five seconds");
+            }
+        } catch (InterruptedException exception) {
+            Thread.currentThread().interrupt();
+        }
     }
 
     private static String localHostname() {
