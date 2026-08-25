@@ -15,6 +15,7 @@ import rs.ac.bg.etf.kdp.common.protocol.BatchAcceptedMessage;
 import rs.ac.bg.etf.kdp.common.protocol.BatchResultMessage;
 import rs.ac.bg.etf.kdp.common.protocol.BatchStatusMessage;
 import rs.ac.bg.etf.kdp.common.protocol.ConnectionRole;
+import rs.ac.bg.etf.kdp.common.protocol.JobStatusSnapshot;
 import rs.ac.bg.etf.kdp.common.protocol.MessageType;
 import rs.ac.bg.etf.kdp.server.CentralServer;
 import rs.ac.bg.etf.kdp.server.ClientSessionHandler;
@@ -37,6 +38,7 @@ import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 import java.util.UUID;
 import java.util.concurrent.TimeUnit;
 import java.util.function.BooleanSupplier;
@@ -61,9 +63,13 @@ class JobClientIntegrationTest {
     private WorkerClient workerClient;
     private WorkerClient secondWorkerClient;
     private LindaSessionHandler lindaHandler;
+    private JobFailureMonitor failureMonitor;
 
     @AfterEach
     void stopServer() {
+        if (failureMonitor != null) {
+            failureMonitor.close();
+        }
         if (workerClient != null) {
             workerClient.close();
         }
@@ -190,10 +196,14 @@ class JobClientIntegrationTest {
         JobClient client = new JobClient(new ClientConfig(
                 "127.0.0.1", server.getLocalPort(), 1_000, 1_000));
         Job job = submitRecoverableEvalJob(client, jobStore);
+        failureMonitor = client.monitorBatch(job.getBatchId());
         waitUntilRootObservedEval(job);
 
         TaskType failedType = disconnectEvalWorker(job, firstWorkerId, secondWorkerId);
+        JobStatusSnapshot failure = failureMonitor.waitForFailure();
         assertEquals(TaskType.EVAL, failedType);
+        assertEquals(job.getId(), failure.getJobId());
+        assertEquals("Worker disconnected", failure.getFailureReason().orElseThrow());
         assertTrue(await(() -> job.getStatus() == JobStatus.FAILED));
         assertEquals(TaskStatus.RUNNING, job.getRootTask().getStatus());
         assertEquals(TaskStatus.FAILED, job.getTasks().get(1).getStatus());
@@ -246,8 +256,11 @@ class JobClientIntegrationTest {
         JobClient client = new JobClient(new ClientConfig(
                 "127.0.0.1", server.getLocalPort(), 1_000, 1_000));
         Job job = submitRecoverableEvalJob(client, jobStore);
+        failureMonitor = client.monitorBatch(job.getBatchId());
         waitUntilRootObservedEval(job);
         disconnectEvalWorker(job, firstWorkerId, secondWorkerId);
+        JobStatusSnapshot failure = failureMonitor.waitForFailure();
+        assertEquals(job.getId(), failure.getJobId());
         assertTrue(await(() -> job.getStatus() == JobStatus.FAILED));
 
         WorkerClient survivingWorker = workerClient != null
@@ -546,6 +559,7 @@ class JobClientIntegrationTest {
         BatchAcceptedMessage accepted = client.submit(List.of(
                 new JobSubmission(specification, archive, List.of(input)),
                 new JobSubmission(specification, archive, List.of(input))));
+        failureMonitor = client.monitorBatch(accepted.getBatchId());
         Job abortedJob = jobStore.findJob(accepted.getJobIds().get(0)).orElseThrow();
         Job retriedJob = jobStore.findJob(accepted.getJobIds().get(1)).orElseThrow();
         assertTrue(await(() -> abortedJob.getStatus() == JobStatus.RUNNING
@@ -553,6 +567,10 @@ class JobClientIntegrationTest {
 
         workerClient.close();
         workerClient = null;
+        Set<UUID> notifiedJobs = Set.of(
+                failureMonitor.waitForFailure().getJobId(),
+                failureMonitor.waitForFailure().getJobId());
+        assertEquals(Set.of(abortedJob.getId(), retriedJob.getId()), notifiedJobs);
         assertTrue(await(() -> abortedJob.getStatus() == JobStatus.FAILED
                 && retriedJob.getStatus() == JobStatus.FAILED));
         assertTrue(await(() -> registry.find(firstWorkerId)
@@ -594,6 +612,67 @@ class JobClientIntegrationTest {
                 finalStatus.findJob(abortedJob.getId()).orElseThrow().getStatus());
         assertEquals(JobStatus.DONE,
                 finalStatus.findJob(retriedJob.getId()).orElseThrow().getStatus());
+    }
+
+    @Test
+    void abortsJobWhenNoClientIsMonitoringFailures() throws Exception {
+        WorkerRegistry registry = new WorkerRegistry();
+        TaskScheduler scheduler = new TaskScheduler(registry);
+        ServerJobStore jobStore = new ServerJobStore(
+                temporaryDirectory.resolve("unavailable-client-jobs"));
+        ServerTaskResultStore resultStore = new ServerTaskResultStore(
+                temporaryDirectory.resolve("unavailable-client-results"));
+        server = new CentralServer(
+                new ServerConfig("127.0.0.1", 0, 10, 8, 1_000),
+                new ServerMessageRouter(
+                        Map.of(
+                                ConnectionRole.CLIENT,
+                                new ClientSessionHandler(jobStore, scheduler, resultStore),
+                                ConnectionRole.WORKER,
+                                new WorkerSessionHandler(registry, scheduler, resultStore)),
+                        (connection, frame) -> connection.send(frame.reply(
+                                MessageType.ERROR, new byte[0]))));
+        server.start();
+
+        Path lindaLibrary = Files.createFile(
+                temporaryDirectory.resolve("unavailable-client-kdp-linda.jar"));
+        workerClient = new WorkerClient(new WorkerConfig(
+                "127.0.0.1",
+                server.getLocalPort(),
+                UUID.randomUUID(),
+                1,
+                1_000,
+                1_000,
+                100,
+                temporaryDirectory.resolve("unavailable-client-worker"),
+                lindaLibrary));
+        workerClient.start();
+
+        Path archive = temporaryDirectory.resolve("unavailable-client-job.jar");
+        createJobArchive(archive);
+        Path input = temporaryDirectory.resolve("input.txt");
+        Files.writeString(input, "unused result", StandardCharsets.UTF_8);
+        JobSpecification specification = new JobSpecification(
+                "unavailable-client-job.jar",
+                List.of(),
+                List.of("result.txt", "5000"),
+                List.of("input.txt"),
+                List.of("result.txt"));
+        JobClient client = new JobClient(new ClientConfig(
+                "127.0.0.1", server.getLocalPort(), 1_000, 1_000));
+        BatchAcceptedMessage accepted = client.submit(List.of(
+                new JobSubmission(specification, archive, List.of(input))));
+        Job job = jobStore.findJob(accepted.getJobIds().get(0)).orElseThrow();
+        assertTrue(await(() -> job.getStatus() == JobStatus.RUNNING));
+
+        workerClient.close();
+        workerClient = null;
+
+        assertTrue(await(() -> job.getStatus() == JobStatus.ABORTED));
+        assertEquals(TaskStatus.ABORTED, job.getRootTask().getStatus());
+        BatchStatusMessage status = client.getBatchStatus(accepted.getBatchId());
+        assertEquals(JobStatus.ABORTED,
+                status.findJob(job.getId()).orElseThrow().getStatus());
     }
 
     @Test

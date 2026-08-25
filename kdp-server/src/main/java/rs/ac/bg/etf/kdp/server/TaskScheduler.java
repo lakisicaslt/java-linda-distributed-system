@@ -41,6 +41,7 @@ public final class TaskScheduler {
     private final WorkerRegistry workerRegistry;
     private final Clock clock;
     private final JobStatusListener statusListener;
+    private JobFailureListener failureListener;
     private final TaskProtocolCodec taskCodec = new TaskProtocolCodec();
     private final TaskExecutionProtocolCodec executionCodec = new TaskExecutionProtocolCodec();
     private final FileTransferProtocolCodec fileCodec = new FileTransferProtocolCodec();
@@ -59,22 +60,41 @@ public final class TaskScheduler {
     private final Set<UUID> cancelledFileTransfers = new HashSet<>();
 
     public TaskScheduler(WorkerRegistry workerRegistry) {
-        this(workerRegistry, Clock.systemUTC(), JobStatusListener.NONE);
+        this(
+                workerRegistry,
+                Clock.systemUTC(),
+                JobStatusListener.NONE,
+                JobFailureListener.NONE);
     }
 
     TaskScheduler(WorkerRegistry workerRegistry, Clock clock) {
-        this(workerRegistry, clock, JobStatusListener.NONE);
+        this(workerRegistry, clock, JobStatusListener.NONE, JobFailureListener.NONE);
     }
 
     TaskScheduler(
             WorkerRegistry workerRegistry,
             Clock clock,
             JobStatusListener statusListener) {
+        this(workerRegistry, clock, statusListener, JobFailureListener.NONE);
+    }
+
+    TaskScheduler(
+            WorkerRegistry workerRegistry,
+            Clock clock,
+            JobStatusListener statusListener,
+            JobFailureListener failureListener) {
         this.workerRegistry = Objects.requireNonNull(
                 workerRegistry, "worker registry must not be null");
         this.clock = Objects.requireNonNull(clock, "clock must not be null");
         this.statusListener = Objects.requireNonNull(
                 statusListener, "job status listener must not be null");
+        this.failureListener = Objects.requireNonNull(
+                failureListener, "job failure listener must not be null");
+    }
+
+    public synchronized void setFailureListener(JobFailureListener listener) {
+        failureListener = Objects.requireNonNull(
+                listener, "job failure listener must not be null");
     }
 
     public synchronized void submit(Task task) throws IOException {
@@ -236,6 +256,7 @@ public final class TaskScheduler {
             return;
         }
 
+        Set<Job> affectedJobs = new HashSet<>();
         for (Task task : tasks.values()) {
             boolean belongsToWorker = task.getAssignedWorkerId()
                     .filter(disconnectedWorkerId.get()::equals)
@@ -251,13 +272,21 @@ public final class TaskScheduler {
                 workerRegistry.releaseTask(task);
                 Instant occurredAt = clock.instant();
                 task.markFailed(occurredAt, "Worker disconnected");
+                Job job = jobsByTaskId.get(task.getId());
+                boolean newlyFailedJob = job != null
+                        && (job.getStatus() == JobStatus.SCHEDULED
+                        || job.getStatus() == JobStatus.RUNNING);
                 markJobFailed(task, occurredAt, "Worker disconnected");
+                if (newlyFailedJob) {
+                    affectedJobs.add(job);
+                }
             }
         }
         pendingFileTransfers.entrySet().removeIf(entry -> entry.getValue()
                 .getAssignedWorkerId()
                 .filter(disconnectedWorkerId.get()::equals)
                 .isPresent());
+        affectedJobs.forEach(this::handleWorkerFailure);
     }
 
     public synchronized void retryTask(UUID taskId) throws IOException {
@@ -388,7 +417,9 @@ public final class TaskScheduler {
             acceptedTaskIds.remove(taskId);
             Instant occurredAt = clock.instant();
             task.markFailed(occurredAt, "Could not request task execution");
+            Job failedJob = activeJob(task);
             markJobFailed(task, occurredAt, "Could not request task execution");
+            handleWorkerFailure(failedJob);
             throw exception;
         }
     }
@@ -561,7 +592,9 @@ public final class TaskScheduler {
             workerRegistry.releaseTask(task);
             Instant occurredAt = clock.instant();
             task.markFailed(occurredAt, "Could not send task to worker");
+            Job failedJob = activeJob(task);
             markJobFailed(task, occurredAt, "Could not send task to worker");
+            handleWorkerFailure(failedJob);
             throw exception;
         }
     }
@@ -712,6 +745,30 @@ public final class TaskScheduler {
                 || job.getStatus() == JobStatus.RUNNING)) {
             job.markFailed(occurredAt, reason);
             recordStatus(job, task);
+        }
+    }
+
+    private Job activeJob(Task task) {
+        Job job = jobsByTaskId.get(task.getId());
+        if (job == null
+                || (job.getStatus() != JobStatus.SCHEDULED
+                && job.getStatus() != JobStatus.RUNNING)) {
+            return null;
+        }
+        return job;
+    }
+
+    private void handleWorkerFailure(Job job) {
+        if (job == null || job.getStatus() != JobStatus.FAILED) {
+            return;
+        }
+        if (failureListener.workerFailed(job)) {
+            return;
+        }
+        try {
+            abortFailedJob(job);
+        } catch (IOException ignored) {
+            // The job is already aborted even if another assignment fails afterwards.
         }
     }
 

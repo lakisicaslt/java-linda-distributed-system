@@ -112,8 +112,14 @@ u konačnom statusu.
 ## Odluka nakon otkaza radne stanice
 
 Kada prekid veze sa workerom zaustavi zadatak, server postavlja zadatak i pripadajući
-posao na `FAILED`. Razlog `Worker disconnected` klijent dobija kroz redovan
-`GET_BATCH_STATUS` upit. Server ne pokušava automatsko ponovno izvršavanje.
+posao na `FAILED`. Da bi server mogao odmah da obavesti dostupnog korisnika, klijent
+otvara trajnu CLIENT sesiju i šalje `MONITOR_BATCH` sa Batch ID-jem. Server potvrđuje
+registraciju porukom `BATCH_MONITORED` sa istim request ID-jem i Batch ID-jem.
+
+Kada worker otkaže, server preko te sesije šalje `JOB_FAILED_NOTIFICATION`. Payload
+ima isti zapis kao `BATCH_STATUS`, ali sadrži tačno jedan `FAILED` posao i razlog
+`Worker disconnected`. Poruka je obaveštenje i zato ima sopstveni request ID; klijent
+na nju ne šalje direktan odgovor.
 
 Klijent zatim za Job ID šalje jednu od sledećih poruka:
 
@@ -123,7 +129,9 @@ Klijent zatim za Job ID šalje jednu od sledećih poruka:
 
 Oba zahteva su dozvoljena samo kada je posao u statusu `FAILED`. Server potvrđuje
 primenjenu odluku porukom `JOB_DECISION_ACCEPTED`, sa istim request ID-jem i Job ID-jem.
-Svako novo dodeljivanje uvećava broj pokušaja zadatka.
+Svako novo dodeljivanje uvećava broj pokušaja zadatka. Ako u trenutku otkaza nema
+monitor konekcije za taj Batch, server odmah postavlja ceo posao na `ABORTED`. Isto
+se dešava ako se poslednja monitor konekcija zatvori dok posao čeka odluku korisnika.
 
 ## Serverski log poslova
 

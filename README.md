@@ -88,12 +88,16 @@ Klijent proverava svaki prenos prema manifestu i čuva ga u direktorijumu izabra
 pri pozivu, odvojeno po Job ID-ju u poddirektorijumima `outputs` i `streams`.
 
 Ako se worker isključi tokom izvršavanja, posao dobija status `FAILED` i razlog
-`Worker disconnected`. Klijent tada bira dalji tok pozivom `abortFailedJob` ili
-`retryFailedJob`. Prva odluka postavlja posao na `ABORTED`, dok druga vraća prekinuti
-zadatak u `READY`; scheduler ga ne ponavlja samostalno i novi pokušaj dobija sledeći
-redni broj. Ako posao ima više aktivnih `eval` zadataka, ponavlja se samo neuspeli
-deo, dok ostali nastavljaju rad. Odluka `abort` šalje aktivnim workerima zahtev za
-prekid, gasi njihove korisničke Java procese i oslobađa rezervisani kapacitet.
+`Worker disconnected`. Klijent može da zadrži trajnu vezu pozivom `monitorBatch` i
+preko dobijenog `JobFailureMonitor` objekta sačeka obaveštenje o konkretnom poslu.
+Tada bira dalji tok pozivom `abortFailedJob` ili `retryFailedJob`. Prva odluka
+postavlja posao na `ABORTED`, dok druga vraća prekinuti zadatak u `READY`; scheduler
+ga ne ponavlja samostalno i novi pokušaj dobija sledeći redni broj. Ako posao ima
+više aktivnih `eval` zadataka, ponavlja se samo neuspeli deo, dok ostali nastavljaju
+rad. Odluka `abort` šalje aktivnim workerima zahtev za prekid, gasi njihove
+korisničke Java procese i oslobađa rezervisani kapacitet. Ako nijedan klijent ne
+prati Batch, ili se poslednji monitor isključi pre odluke, server automatski
+prekida ceo posao.
 
 Centralni server vodi evidenciju životnog ciklusa poslova u fajlu
 `server-data/server.log`. Za svaku promenu statusa upisuju se vreme prijema, Job ID,

@@ -159,6 +159,12 @@ public final class JobClient {
         sendJobDecision(MessageType.RETRY_JOB, jobId);
     }
 
+    public JobFailureMonitor monitorBatch(UUID batchId) throws IOException {
+        JobFailureMonitor monitor = new JobFailureMonitor(config, batchId);
+        monitor.start();
+        return monitor;
+    }
+
     private void sendJobDecision(MessageType decision, UUID jobId) throws IOException {
         Objects.requireNonNull(jobId, "job id must not be null");
         try (Socket socket = ProtocolSockets.connect(

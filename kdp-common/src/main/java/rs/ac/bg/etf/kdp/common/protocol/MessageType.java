@@ -18,6 +18,9 @@ public enum MessageType {
     ABORT_JOB(106, roles(ConnectionRole.CLIENT)),
     RETRY_JOB(107, roles(ConnectionRole.CLIENT)),
     JOB_DECISION_ACCEPTED(108, roles(ConnectionRole.CLIENT)),
+    MONITOR_BATCH(109, roles(ConnectionRole.CLIENT)),
+    BATCH_MONITORED(110, roles(ConnectionRole.CLIENT)),
+    JOB_FAILED_NOTIFICATION(111, roles(ConnectionRole.CLIENT)),
 
     REGISTER_WORKER(200, roles(ConnectionRole.WORKER)),
     WORKER_REGISTERED(201, roles(ConnectionRole.WORKER)),

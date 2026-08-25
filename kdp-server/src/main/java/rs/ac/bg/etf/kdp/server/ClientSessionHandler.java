@@ -40,6 +40,7 @@ public final class ClientSessionHandler implements ServerMessageHandler {
     private final ServerJobStore jobStore;
     private final TaskScheduler scheduler;
     private final ServerTaskResultStore resultStore;
+    private final ClientMonitorRegistry monitorRegistry;
     private final BatchSubmissionProtocolCodec submissionCodec =
             new BatchSubmissionProtocolCodec();
     private final BatchStatusProtocolCodec statusCodec = new BatchStatusProtocolCodec();
@@ -63,10 +64,22 @@ public final class ClientSessionHandler implements ServerMessageHandler {
             ServerJobStore jobStore,
             TaskScheduler scheduler,
             ServerTaskResultStore resultStore) {
+        this(jobStore, scheduler, resultStore, new ClientMonitorRegistry());
+    }
+
+    ClientSessionHandler(
+            ServerJobStore jobStore,
+            TaskScheduler scheduler,
+            ServerTaskResultStore resultStore,
+            ClientMonitorRegistry monitorRegistry) {
         this.jobStore = Objects.requireNonNull(jobStore, "job store must not be null");
         this.scheduler = Objects.requireNonNull(scheduler, "task scheduler must not be null");
         this.resultStore = Objects.requireNonNull(
                 resultStore, "task result store must not be null");
+        this.monitorRegistry = Objects.requireNonNull(
+                monitorRegistry, "client monitor registry must not be null");
+        this.monitorRegistry.setUnavailableClientHandler(this::abortUnavailableJob);
+        this.scheduler.setFailureListener(this.monitorRegistry);
     }
 
     @Override
@@ -93,6 +106,8 @@ public final class ClientSessionHandler implements ServerMessageHandler {
                 applyJobDecision(connection, frame, false);
             } else if (frame.getType() == MessageType.RETRY_JOB) {
                 applyJobDecision(connection, frame, true);
+            } else if (frame.getType() == MessageType.MONITOR_BATCH) {
+                monitorBatch(connection, frame);
             } else if (frame.getType() == MessageType.FILE_ACKNOWLEDGED) {
                 acknowledgeResultFile(connection, frame);
             } else if (frame.getType() == MessageType.FILE_BEGIN
@@ -115,6 +130,7 @@ public final class ClientSessionHandler implements ServerMessageHandler {
         jobStore.disconnect(connection);
         submittedJobIds.remove(connection);
         pendingResultTransfers.remove(connection);
+        monitorRegistry.disconnect(connection);
     }
 
     private void submitBatch(ServerConnection connection, ProtocolFrame frame)
@@ -210,14 +226,42 @@ public final class ClientSessionHandler implements ServerMessageHandler {
                 new ProtocolException(
                         ProtocolError.INVALID_MESSAGE_PAYLOAD,
                         "Requested job does not exist"));
-        if (retry) {
-            scheduler.retryFailedJob(job);
-        } else {
-            scheduler.abortFailedJob(job);
+        synchronized (scheduler) {
+            if (job.getStatus() != JobStatus.FAILED) {
+                throw new IllegalStateException("only a failed job accepts a client decision");
+            }
+            monitorRegistry.decisionMade(job);
+            if (retry) {
+                scheduler.retryFailedJob(job);
+            } else {
+                scheduler.abortFailedJob(job);
+            }
         }
         connection.send(frame.reply(
                 MessageType.JOB_DECISION_ACCEPTED,
                 decisionCodec.encodeJobReference(jobId)));
+    }
+
+    private void monitorBatch(ServerConnection connection, ProtocolFrame frame)
+            throws IOException {
+        UUID batchId = statusCodec.decodeBatchReference(frame.getPayload());
+        if (jobStore.findBatch(batchId).isEmpty()) {
+            throw new ProtocolException(
+                    ProtocolError.INVALID_MESSAGE_PAYLOAD,
+                    "Requested batch does not exist");
+        }
+        monitorRegistry.monitor(connection, batchId);
+        connection.send(frame.reply(
+                MessageType.BATCH_MONITORED,
+                statusCodec.encodeBatchReference(batchId)));
+    }
+
+    private void abortUnavailableJob(Job job) {
+        try {
+            scheduler.abortFailedJob(job);
+        } catch (IOException | IllegalStateException ignored) {
+            // Another client decision may have completed at the same time.
+        }
     }
 
     private void sendResultFile(
