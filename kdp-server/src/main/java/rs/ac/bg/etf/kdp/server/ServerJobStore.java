@@ -39,6 +39,7 @@ public final class ServerJobStore {
     private final Map<UUID, JobBatch> batches = new LinkedHashMap<>();
     private final Map<UUID, Job> jobs = new HashMap<>();
     private final Map<UUID, Set<FileKey>> receivedFiles = new HashMap<>();
+    private final Set<UUID> jobsClaimedForScheduling = new HashSet<>();
     private final Map<ServerConnection, FileTransferReceiver> receivers =
             new IdentityHashMap<>();
 
@@ -153,6 +154,14 @@ public final class ServerJobStore {
                 .toList();
     }
 
+    public synchronized Optional<Job> claimForScheduling(UUID jobId) {
+        Job job = requireJob(jobId);
+        if (!isComplete(jobId) || !jobsClaimedForScheduling.add(jobId)) {
+            return Optional.empty();
+        }
+        return Optional.of(job);
+    }
+
     public Path jobDirectory(UUID jobId) {
         Objects.requireNonNull(jobId, "job id must not be null");
         return jobDirectory.resolve(jobId.toString());
@@ -168,6 +177,12 @@ public final class ServerJobStore {
 
     public Path inputPath(UUID jobId, String fileName) {
         Objects.requireNonNull(fileName, "input file name must not be null");
+        synchronized (this) {
+            Job job = requireJob(jobId);
+            if (!job.getSpecification().getInputFileNames().contains(fileName)) {
+                throw new IllegalArgumentException("input file is not declared by this job");
+            }
+        }
         return inputDirectory(jobId).resolve(fileName);
     }
 

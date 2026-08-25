@@ -1,5 +1,6 @@
 package rs.ac.bg.etf.kdp.server;
 
+import rs.ac.bg.etf.kdp.common.domain.Job;
 import rs.ac.bg.etf.kdp.common.domain.JobBatch;
 import rs.ac.bg.etf.kdp.common.protocol.BatchAcceptedMessage;
 import rs.ac.bg.etf.kdp.common.protocol.BatchSubmissionMessage;
@@ -12,8 +13,10 @@ import rs.ac.bg.etf.kdp.common.protocol.ProtocolFrame;
 import rs.ac.bg.etf.kdp.common.protocol.ReceivedFile;
 
 import java.io.IOException;
+import java.nio.file.Path;
 import java.util.HashSet;
 import java.util.IdentityHashMap;
+import java.util.List;
 import java.util.Map;
 import java.util.Objects;
 import java.util.Optional;
@@ -24,13 +27,15 @@ import java.util.UUID;
 public final class ClientSessionHandler implements ServerMessageHandler {
 
     private final ServerJobStore jobStore;
+    private final TaskScheduler scheduler;
     private final BatchSubmissionProtocolCodec submissionCodec =
             new BatchSubmissionProtocolCodec();
     private final Map<ServerConnection, Set<UUID>> submittedJobIds =
             new IdentityHashMap<>();
 
-    public ClientSessionHandler(ServerJobStore jobStore) {
+    public ClientSessionHandler(ServerJobStore jobStore, TaskScheduler scheduler) {
         this.jobStore = Objects.requireNonNull(jobStore, "job store must not be null");
+        this.scheduler = Objects.requireNonNull(scheduler, "task scheduler must not be null");
     }
 
     @Override
@@ -92,8 +97,22 @@ public final class ClientSessionHandler implements ServerMessageHandler {
         }
         Optional<ReceivedFile> received = jobStore.accept(connection, frame, allowedIds);
         if (received.isPresent()) {
-            connection.send(received.get().getAcknowledgement());
+            ReceivedFile file = received.get();
+            connection.send(file.getAcknowledgement());
+            scheduleCompleteJob(file.getMetadata().getOwnerId());
         }
+    }
+
+    private void scheduleCompleteJob(UUID jobId) throws IOException {
+        Optional<Job> completeJob = jobStore.claimForScheduling(jobId);
+        if (completeJob.isEmpty()) {
+            return;
+        }
+        Job job = completeJob.get();
+        List<Path> inputs = job.getSpecification().getInputFileNames().stream()
+                .map(fileName -> jobStore.inputPath(jobId, fileName))
+                .toList();
+        scheduler.submit(job, jobStore.archivePath(jobId), inputs);
     }
 
     private Set<UUID> requireSession(ServerConnection connection) throws ProtocolException {

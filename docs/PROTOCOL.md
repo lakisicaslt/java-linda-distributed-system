@@ -61,8 +61,10 @@ server-data/jobs/<job-id>/archive
 server-data/jobs/<job-id>/inputs
 ```
 
-Nakon svih potvrda klijent može da zatvori konekciju, dok server zadržava posao i
-njegove identifikatore za kasnije izvršavanje i upite.
+Kada su potvrđeni JAR i svi ulazi, server automatski stavlja posao u scheduler.
+Ako nema slobodnog workera, posao ostaje u statusu `READY`. Nakon svih potvrda
+klijent može da zatvori konekciju, dok server zadržava posao i njegove identifikatore
+za izvršavanje i kasnije upite.
 
 ## Registracija radne stanice
 

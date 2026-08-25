@@ -67,7 +67,8 @@ public final class WorkerSessionHandler implements ServerMessageHandler {
             } else if (frame.getType() == MessageType.HEARTBEAT) {
                 heartbeat(connection, frame);
             } else if (frame.getType() == MessageType.TASK_ACCEPTED) {
-                scheduler.accept(connection, frame);
+                UUID taskId = scheduler.accept(connection, frame);
+                scheduler.startPreparedExecution(taskId);
             } else if (frame.getType() == MessageType.TASK_STARTED) {
                 scheduler.startTask(connection, frame);
             } else if (frame.getType() == MessageType.TASK_FINISHED) {

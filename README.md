@@ -70,7 +70,10 @@ specifikacija posla, dobija stabilne identifikatore i zatim strimuje odgovaraju�
 JAR i ulazne datoteke. I klijent i server proveravaju da imena lokalnih datoteka
 odgovaraju deklaraciji posla. Server primljene poslove čuva u `server-data/jobs`,
 odvojeno po Job ID-ju, i smatra ih kompletnim tek kada primi JAR i sve deklarisane
-ulazne datoteke. Povezivanje kompletnih poslova sa schedulerom je naredni korak.
+ulazne datoteke. Kompletan posao automatski ulazi u scheduler. Kada worker prihvati
+njegov korenski zadatak, server mu šalje sačuvani JAR i ulaze, čeka potvrdu svakog
+fajla i tek zatim šalje `EXECUTE_TASK`. Statusi korenskog zadatka istovremeno menjaju
+status posla kroz `READY`, `SCHEDULED`, `RUNNING`, `DONE` ili `FAILED`.
 
 Ručna provera iz IntelliJ IDEA:
 
