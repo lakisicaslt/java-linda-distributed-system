@@ -85,6 +85,19 @@ worker diskonektuje dok mu je zadatak dodeljen ili se izvršava, rezervacija se
 uklanja, a zadatak prelazi u status `FAILED`. Zadatak se ne vraća automatski u red:
 korisnik bira da li se prekinuti deo ponavlja ili se odustaje od celog posla.
 
+## Status izvršavanja zadatka
+
+Nakon `TASK_ACCEPTED`, worker prijavljuje promene statusa sledećim porukama:
+
+- `TASK_STARTED` sadrži Task ID i prevodi zadatak u `RUNNING`;
+- `TASK_FINISHED` sadrži Task ID i označava uspešno izvršavanje (`DONE`);
+- `TASK_FAILED` sadrži Task ID i UTF-8 opis greške i prevodi zadatak u `FAILED`.
+
+Server prihvata ove poruke samo od workera kome je zadatak dodeljen. Posle poruke
+`TASK_FINISHED` ili `TASK_FAILED` oslobađa se jedno mesto u prijavljenom kapacitetu
+workera. Neuspešan zadatak se ne stavlja automatski u red; novi pokušaj nastaje tek
+nakon izričite odluke korisnika.
+
 ## Prenos datoteka
 
 Jedan prenos koristi isti request ID u svim porukama i ima sledeći redosled:

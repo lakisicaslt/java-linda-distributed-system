@@ -163,6 +163,46 @@ class WorkerClientIntegrationTest {
     }
 
     @Test
+    void reportsTaskExecutionLifecycleToServer() throws Exception {
+        WorkerRegistry registry = new WorkerRegistry();
+        TaskScheduler scheduler = new TaskScheduler(registry);
+        server = new CentralServer(
+                new ServerConfig("127.0.0.1", 0, 10, 4, 1_000),
+                new WorkerSessionHandler(registry, scheduler));
+        server.start();
+
+        UUID workerId = UUID.randomUUID();
+        WorkerConfig config = new WorkerConfig(
+                "127.0.0.1",
+                server.getLocalPort(),
+                workerId,
+                1,
+                ProtocolConstants.CONNECT_TIMEOUT_MILLIS,
+                ProtocolConstants.HANDSHAKE_TIMEOUT_MILLIS,
+                100,
+                temporaryDirectory.resolve("lifecycle-worker"));
+        AtomicReference<UUID> receivedTaskId = new AtomicReference<>();
+        client = new WorkerClient(
+                config,
+                assignment -> receivedTaskId.set(assignment.getTaskId()));
+        client.start();
+
+        Task task = Task.root(
+                UUID.randomUUID(), UUID.randomUUID(), "Lifecycle task", Instant.now());
+        scheduler.submit(task);
+        assertTrue(await(() -> scheduler.isAccepted(task.getId())));
+        assertEquals(task.getId(), receivedTaskId.get());
+
+        client.reportTaskStarted(task.getId());
+        assertTrue(await(() -> task.getStatus() == TaskStatus.RUNNING));
+
+        client.reportTaskFinished(task.getId());
+        assertTrue(await(() -> task.getStatus() == TaskStatus.DONE));
+        assertTrue(client.getAssignedTaskIds().isEmpty());
+        assertTrue(registry.find(workerId).orElseThrow().getActiveTaskIds().isEmpty());
+    }
+
+    @Test
     void serverDisconnectsWorkerThatStopsSendingHeartbeats() throws Exception {
         WorkerRegistry registry = new WorkerRegistry();
         server = new CentralServer(

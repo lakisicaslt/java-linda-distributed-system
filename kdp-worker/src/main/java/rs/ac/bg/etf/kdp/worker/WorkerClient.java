@@ -10,6 +10,7 @@ import rs.ac.bg.etf.kdp.common.protocol.ProtocolHandshake;
 import rs.ac.bg.etf.kdp.common.protocol.ProtocolSockets;
 import rs.ac.bg.etf.kdp.common.protocol.ReceivedFile;
 import rs.ac.bg.etf.kdp.common.protocol.TaskAssignmentMessage;
+import rs.ac.bg.etf.kdp.common.protocol.TaskFailureMessage;
 import rs.ac.bg.etf.kdp.common.protocol.TaskProtocolCodec;
 import rs.ac.bg.etf.kdp.common.protocol.WorkerProtocolCodec;
 import rs.ac.bg.etf.kdp.common.protocol.WorkerRegistrationMessage;
@@ -109,6 +110,29 @@ public final class WorkerClient implements AutoCloseable {
 
     public Path getTaskDirectory(UUID taskId) {
         return fileStore.taskDirectory(taskId);
+    }
+
+    public void reportTaskStarted(UUID taskId) throws IOException {
+        requireAssignedTask(taskId);
+        send(ProtocolFrame.request(
+                MessageType.TASK_STARTED,
+                taskCodec.encodeTaskReference(taskId)));
+    }
+
+    public void reportTaskFinished(UUID taskId) throws IOException {
+        requireAssignedTask(taskId);
+        send(ProtocolFrame.request(
+                MessageType.TASK_FINISHED,
+                taskCodec.encodeTaskReference(taskId)));
+        assignedTaskIds.remove(taskId);
+    }
+
+    public void reportTaskFailed(UUID taskId, String reason) throws IOException {
+        requireAssignedTask(taskId);
+        send(ProtocolFrame.request(
+                MessageType.TASK_FAILED,
+                taskCodec.encodeFailure(new TaskFailureMessage(taskId, reason))));
+        assignedTaskIds.remove(taskId);
     }
 
     private void performHandshake() throws IOException {
@@ -242,6 +266,13 @@ public final class WorkerClient implements AutoCloseable {
     private void send(ProtocolFrame frame) throws IOException {
         synchronized (writeLock) {
             frameCodec.write(output, frame);
+        }
+    }
+
+    private void requireAssignedTask(UUID taskId) {
+        Objects.requireNonNull(taskId, "task id must not be null");
+        if (!assignedTaskIds.contains(taskId)) {
+            throw new IllegalArgumentException("task is not assigned to this worker");
         }
     }
 

@@ -46,6 +46,12 @@ public final class WorkerSessionHandler implements ServerMessageHandler {
                 heartbeat(connection, frame);
             } else if (frame.getType() == MessageType.TASK_ACCEPTED) {
                 scheduler.accept(connection, frame);
+            } else if (frame.getType() == MessageType.TASK_STARTED) {
+                scheduler.startTask(connection, frame);
+            } else if (frame.getType() == MessageType.TASK_FINISHED) {
+                scheduler.finishTask(connection, frame);
+            } else if (frame.getType() == MessageType.TASK_FAILED) {
+                scheduler.failTask(connection, frame);
             } else if (frame.getType() == MessageType.FILE_ACKNOWLEDGED) {
                 scheduler.acknowledgeFile(connection, frame);
             } else {

@@ -39,10 +39,12 @@ prestala da se javlja.
 
 Osnovni scheduler prihvata spremne zadatke, bira online radnu stanicu sa slobodnim
 kapacitetom i šalje joj `ASSIGN_TASK`. Worker pamti zadatak i odgovara porukom
-`TASK_ACCEPTED` sa istim request ID-jem. Ako se radna stanica isključi tokom
-izvršavanja, njen zadatak prelazi u `FAILED` i ne ponavlja se automatski. Odluka o
-ponavljanju prekinutog dela ili odustajanju od celog posla pripada korisniku, kao
-što zahteva tekst projekta.
+`TASK_ACCEPTED` sa istim request ID-jem. Worker može zatim da prijavi početak,
+uspešan završetak ili neuspeh zadatka. Server proverava da status prijavljuje upravo
+worker kome je zadatak dodeljen i po završetku oslobađa njegov kapacitet. Ako se
+radna stanica isključi tokom izvršavanja, njen zadatak prelazi u `FAILED` i ne
+ponavlja se automatski. Odluka o ponavljanju prekinutog dela ili odustajanju od
+celog posla pripada korisniku, kao što zahteva tekst projekta.
 
 JAR i ulazne datoteke šalju se od servera ka workeru u delovima od najviše 64 KiB.
 Worker ih upisuje direktno na disk u direktorijum zadatka i potvrđuje završen prenos.

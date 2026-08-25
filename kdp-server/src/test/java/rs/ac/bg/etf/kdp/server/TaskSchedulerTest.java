@@ -10,6 +10,7 @@ import rs.ac.bg.etf.kdp.common.protocol.ProtocolException;
 import rs.ac.bg.etf.kdp.common.protocol.ProtocolFrame;
 import rs.ac.bg.etf.kdp.common.protocol.ProtocolFrameCodec;
 import rs.ac.bg.etf.kdp.common.protocol.TaskAssignmentMessage;
+import rs.ac.bg.etf.kdp.common.protocol.TaskFailureMessage;
 import rs.ac.bg.etf.kdp.common.protocol.TaskProtocolCodec;
 import rs.ac.bg.etf.kdp.common.protocol.WorkerRegistrationMessage;
 
@@ -157,6 +158,81 @@ class TaskSchedulerTest {
         assertEquals(TaskStatus.READY, second.getStatus());
         assertEquals(1, scheduler.getReadyTaskCount());
         assertEquals(1, scheduler.getPendingAcceptanceCount());
+    }
+
+    @Test
+    void recordsStartedAndFinishedTaskAndReleasesWorkerCapacity() throws Exception {
+        WorkerRegistry registry = new WorkerRegistry(clock);
+        TaskScheduler scheduler = new TaskScheduler(registry, clock);
+        ConnectionOutput target = registeredWorker(registry, 1);
+        Task task = newTask();
+        scheduler.submit(task);
+        ProtocolFrame assignment = target.readFrame();
+        scheduler.accept(target.connection, assignment.reply(
+                MessageType.TASK_ACCEPTED,
+                taskCodec.encodeTaskReference(task.getId())));
+        Task waitingTask = newTask();
+        scheduler.submit(waitingTask);
+        assertEquals(TaskStatus.READY, waitingTask.getStatus());
+
+        scheduler.startTask(target.connection, ProtocolFrame.request(
+                MessageType.TASK_STARTED,
+                taskCodec.encodeTaskReference(task.getId())));
+
+        assertEquals(TaskStatus.RUNNING, task.getStatus());
+
+        scheduler.finishTask(target.connection, ProtocolFrame.request(
+                MessageType.TASK_FINISHED,
+                taskCodec.encodeTaskReference(task.getId())));
+
+        assertEquals(TaskStatus.DONE, task.getStatus());
+        assertFalse(scheduler.isAccepted(task.getId()));
+        assertEquals(TaskStatus.SCHEDULED, waitingTask.getStatus());
+        assertTrue(registry.find(task.getAssignedWorkerId().orElseThrow())
+                .orElseThrow().getActiveTaskIds().contains(waitingTask.getId()));
+    }
+
+    @Test
+    void recordsWorkerReportedFailureWithoutRetryingTask() throws Exception {
+        WorkerRegistry registry = new WorkerRegistry(clock);
+        TaskScheduler scheduler = new TaskScheduler(registry, clock);
+        ConnectionOutput target = registeredWorker(registry, 1);
+        Task task = newTask();
+        scheduler.submit(task);
+        ProtocolFrame assignment = target.readFrame();
+        scheduler.accept(target.connection, assignment.reply(
+                MessageType.TASK_ACCEPTED,
+                taskCodec.encodeTaskReference(task.getId())));
+
+        scheduler.failTask(target.connection, ProtocolFrame.request(
+                MessageType.TASK_FAILED,
+                taskCodec.encodeFailure(new TaskFailureMessage(
+                        task.getId(), "JAR could not be started"))));
+
+        assertEquals(TaskStatus.FAILED, task.getStatus());
+        assertEquals("JAR could not be started", task.getFailureReason());
+        assertEquals(0, scheduler.getReadyTaskCount());
+        assertFalse(scheduler.isAccepted(task.getId()));
+    }
+
+    @Test
+    void rejectsTaskStatusReportedByDifferentWorker() throws Exception {
+        WorkerRegistry registry = new WorkerRegistry(clock);
+        TaskScheduler scheduler = new TaskScheduler(registry, clock);
+        ConnectionOutput assignedWorker = registeredWorker(registry, 1);
+        Task task = newTask();
+        scheduler.submit(task);
+        ProtocolFrame assignment = assignedWorker.readFrame();
+        scheduler.accept(assignedWorker.connection, assignment.reply(
+                MessageType.TASK_ACCEPTED,
+                taskCodec.encodeTaskReference(task.getId())));
+        ConnectionOutput differentWorker = registeredWorker(registry, 1);
+
+        assertProtocolError(ProtocolError.CORRELATION_MISMATCH, () ->
+                scheduler.startTask(differentWorker.connection, ProtocolFrame.request(
+                        MessageType.TASK_STARTED,
+                        taskCodec.encodeTaskReference(task.getId()))));
+        assertEquals(TaskStatus.SCHEDULED, task.getStatus());
     }
 
     private ConnectionOutput registeredWorker(WorkerRegistry registry, int capacity) {

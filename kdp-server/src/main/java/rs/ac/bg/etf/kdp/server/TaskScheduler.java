@@ -10,6 +10,7 @@ import rs.ac.bg.etf.kdp.common.protocol.ProtocolError;
 import rs.ac.bg.etf.kdp.common.protocol.ProtocolException;
 import rs.ac.bg.etf.kdp.common.protocol.ProtocolFrame;
 import rs.ac.bg.etf.kdp.common.protocol.TaskAssignmentMessage;
+import rs.ac.bg.etf.kdp.common.protocol.TaskFailureMessage;
 import rs.ac.bg.etf.kdp.common.protocol.TaskProtocolCodec;
 import rs.ac.bg.etf.kdp.common.protocol.TransferFileKind;
 
@@ -136,6 +137,37 @@ public final class TaskScheduler {
         dispatchAvailableTasks();
     }
 
+    public synchronized void startTask(
+            ServerConnection connection,
+            ProtocolFrame frame) throws ProtocolException {
+        UUID taskId = taskCodec.decodeTaskReference(frame.getPayload());
+        Task task = assignedTask(connection, taskId);
+        requireAccepted(taskId);
+        task.markRunning(clock.instant());
+    }
+
+    public synchronized void finishTask(
+            ServerConnection connection,
+            ProtocolFrame frame) throws IOException {
+        UUID taskId = taskCodec.decodeTaskReference(frame.getPayload());
+        Task task = assignedTask(connection, taskId);
+        requireAccepted(taskId);
+        task.markDone(clock.instant());
+        completeAssignment(task);
+        dispatchAvailableTasks();
+    }
+
+    public synchronized void failTask(
+            ServerConnection connection,
+            ProtocolFrame frame) throws IOException {
+        TaskFailureMessage failure = taskCodec.decodeFailure(frame.getPayload());
+        Task task = assignedTask(connection, failure.getTaskId());
+        requireAccepted(task.getId());
+        task.markFailed(clock.instant(), failure.getReason());
+        completeAssignment(task);
+        dispatchAvailableTasks();
+    }
+
     public synchronized UUID sendFile(
             UUID taskId,
             Path source,
@@ -246,5 +278,40 @@ public final class TaskScheduler {
 
     private void removePendingAcceptance(UUID taskId) {
         pendingAcceptances.entrySet().removeIf(entry -> entry.getValue().getId().equals(taskId));
+    }
+
+    private Task assignedTask(ServerConnection connection, UUID taskId)
+            throws ProtocolException {
+        Task task = tasks.get(taskId);
+        if (task == null) {
+            throw new ProtocolException(
+                    ProtocolError.INVALID_MESSAGE_PAYLOAD,
+                    "Worker reported an unknown task");
+        }
+        UUID workerId = workerRegistry.findWorkerId(connection).orElseThrow(() ->
+                new ProtocolException(
+                        ProtocolError.INVALID_MESSAGE_PAYLOAD,
+                        "Unregistered worker cannot report task status"));
+        if (!task.getAssignedWorkerId().filter(workerId::equals).isPresent()) {
+            throw new ProtocolException(
+                    ProtocolError.CORRELATION_MISMATCH,
+                    "Task is assigned to a different worker");
+        }
+        return task;
+    }
+
+    private void requireAccepted(UUID taskId) throws ProtocolException {
+        if (!acceptedTaskIds.contains(taskId)) {
+            throw new ProtocolException(
+                    ProtocolError.INVALID_MESSAGE_PAYLOAD,
+                    "Worker must accept the task before reporting its status");
+        }
+    }
+
+    private void completeAssignment(Task task) {
+        workerRegistry.releaseTask(task);
+        acceptedTaskIds.remove(task.getId());
+        pendingFileTransfers.entrySet().removeIf(
+                entry -> entry.getValue().getId().equals(task.getId()));
     }
 }

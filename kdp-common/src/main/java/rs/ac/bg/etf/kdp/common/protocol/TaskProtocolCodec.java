@@ -8,6 +8,7 @@ import java.io.DataInputStream;
 import java.io.DataOutputStream;
 import java.io.EOFException;
 import java.io.IOException;
+import java.nio.charset.StandardCharsets;
 import java.util.Objects;
 import java.util.UUID;
 
@@ -16,6 +17,7 @@ public final class TaskProtocolCodec {
 
     private static final int ASSIGNMENT_PAYLOAD_SIZE = 2 * 16 + 1 + Integer.BYTES;
     private static final int TASK_REFERENCE_PAYLOAD_SIZE = 16;
+    private static final int MAX_FAILURE_REASON_BYTES = 4_096;
 
     public byte[] encodeAssignment(TaskAssignmentMessage assignment) {
         Objects.requireNonNull(assignment, "task assignment must not be null");
@@ -68,6 +70,53 @@ public final class TaskProtocolCodec {
             throw invalidPayload("Task reference payload is truncated", exception);
         } catch (IOException exception) {
             throw invalidPayload("Invalid task reference payload", exception);
+        }
+    }
+
+    public byte[] encodeFailure(TaskFailureMessage failure) {
+        Objects.requireNonNull(failure, "task failure must not be null");
+        byte[] reason = failure.getReason().getBytes(StandardCharsets.UTF_8);
+        if (reason.length > MAX_FAILURE_REASON_BYTES) {
+            throw new IllegalArgumentException("task failure reason is too long");
+        }
+        try {
+            ByteArrayOutputStream bytes = new ByteArrayOutputStream(
+                    TASK_REFERENCE_PAYLOAD_SIZE + Integer.BYTES + reason.length);
+            DataOutputStream output = new DataOutputStream(bytes);
+            writeUuid(output, failure.getTaskId());
+            output.writeInt(reason.length);
+            output.write(reason);
+            output.flush();
+            return bytes.toByteArray();
+        } catch (IOException exception) {
+            throw new IllegalStateException("Could not create task failure payload", exception);
+        }
+    }
+
+    public TaskFailureMessage decodeFailure(byte[] payload) throws ProtocolException {
+        Objects.requireNonNull(payload, "task failure payload must not be null");
+        try {
+            ByteArrayInputStream bytes = new ByteArrayInputStream(payload);
+            DataInputStream input = new DataInputStream(bytes);
+            UUID taskId = readUuid(input);
+            int reasonLength = input.readInt();
+            if (reasonLength < 1 || reasonLength > MAX_FAILURE_REASON_BYTES) {
+                throw new IllegalArgumentException(
+                        "Invalid task failure reason length: " + reasonLength);
+            }
+            byte[] reason = input.readNBytes(reasonLength);
+            if (reason.length != reasonLength) {
+                throw new EOFException("Task failure reason is truncated");
+            }
+            if (bytes.available() != 0) {
+                throw new IllegalArgumentException("Task failure payload has trailing data");
+            }
+            return new TaskFailureMessage(
+                    taskId, new String(reason, StandardCharsets.UTF_8));
+        } catch (EOFException exception) {
+            throw invalidPayload("Task failure payload is truncated", exception);
+        } catch (IOException | IllegalArgumentException exception) {
+            throw invalidPayload("Invalid task failure payload", exception);
         }
     }
 

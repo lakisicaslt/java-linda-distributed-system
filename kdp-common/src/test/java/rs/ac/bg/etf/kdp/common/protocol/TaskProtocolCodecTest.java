@@ -36,9 +36,20 @@ class TaskProtocolCodecTest {
     }
 
     @Test
+    void roundTripsTaskFailure() throws Exception {
+        UUID taskId = UUID.randomUUID();
+        TaskFailureMessage decoded = codec.decodeFailure(codec.encodeFailure(
+                new TaskFailureMessage(taskId, "JAR could not be started")));
+
+        assertEquals(taskId, decoded.getTaskId());
+        assertEquals("JAR could not be started", decoded.getReason());
+    }
+
+    @Test
     void rejectsMalformedPayloads() {
         assertInvalidPayload(() -> codec.decodeAssignment(new byte[36]));
         assertInvalidPayload(() -> codec.decodeTaskReference(new byte[15]));
+        assertInvalidPayload(() -> codec.decodeFailure(new byte[19]));
 
         byte[] unknownType = new byte[37];
         unknownType[32] = 99;
