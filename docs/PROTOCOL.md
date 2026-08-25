@@ -43,6 +43,27 @@ Ako prva četiri bajta nisu `KDP1`, konekcija se odbacuje kao pogrešan protokol
 
 Nakon handshake-a svaka poruka se proverava prema ulozi konekcije. Na primer, `HEARTBEAT` je dozvoljen na WORKER sesiji, a `SUBMIT_BATCH` na CLIENT sesiji. Pokušaj slanja poruke druge uloge završava se greškom `ROLE_VIOLATION`.
 
+## Predaja poslova
+
+CLIENT sesija šalje `SUBMIT_BATCH` sa pozitivnim brojem poslova i specifikacijom
+svakog posla. Specifikacija redom sadrži ime JAR-a, JVM argumente, programske
+argumente, imena ulaznih datoteka i imena izlaznih datoteka. Server proverava ista
+ograničenja kao klijent, uključujući najviše šest ulaznih i šest izlaznih datoteka.
+
+Server odgovara porukom `BATCH_ACCEPTED` sa istim request ID-jem. Payload sadrži
+Batch ID i po jedan Job ID za svaku poslatu specifikaciju, u istom redosledu.
+Klijent potom za svaki Job ID prenosi jedan `JOB_ARCHIVE` i sve deklarisane `INPUT`
+datoteke. Za svaki prenos čeka `FILE_ACKNOWLEDGED`. Server posao smatra potpuno
+primljenim tek kada su JAR i svi ulazi potvrđeni. Primljene datoteke čuva u:
+
+```text
+server-data/jobs/<job-id>/archive
+server-data/jobs/<job-id>/inputs
+```
+
+Nakon svih potvrda klijent može da zatvori konekciju, dok server zadržava posao i
+njegove identifikatore za kasnije izvršavanje i upite.
+
 ## Registracija radne stanice
 
 WORKER sesija odmah nakon handshake-a šalje `REGISTER_WORKER`. Payload redom sadrži:
@@ -126,7 +147,7 @@ pa se primljeni bajtovi redom upisuju direktno u privremenu datoteku.
 
 Vrste datoteka su:
 
-- `JOB_ARCHIVE` i `INPUT` za smer server -> worker;
+- `JOB_ARCHIVE` i `INPUT` za smer client -> server i server -> worker;
 - `OUTPUT`, `STANDARD_OUTPUT` i `STANDARD_ERROR` za smer worker -> server.
 
 Server prihvata `OUTPUT` samo ako je ime datoteke navedeno u specifikaciji posla.

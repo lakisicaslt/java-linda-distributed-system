@@ -4,6 +4,7 @@ import rs.ac.bg.etf.kdp.common.protocol.MessageType;
 import rs.ac.bg.etf.kdp.common.protocol.ConnectionRole;
 
 import java.nio.charset.StandardCharsets;
+import java.nio.file.Path;
 import java.util.Map;
 
 public final class ServerMain {
@@ -24,12 +25,17 @@ public final class ServerMain {
         TaskScheduler taskScheduler = new TaskScheduler(workerRegistry);
         WorkerSessionHandler workerHandler = new WorkerSessionHandler(
                 workerRegistry, taskScheduler);
+        ServerJobStore jobStore = new ServerJobStore(Path.of("server-data", "jobs"));
+        ClientSessionHandler clientHandler = new ClientSessionHandler(jobStore);
         ServerMessageHandler notImplemented = (connection, frame) -> {
             String message = "Message is not implemented yet: " + frame.getType();
             connection.send(frame.reply(MessageType.ERROR, message.getBytes(StandardCharsets.UTF_8)));
         };
         ServerMessageRouter router = new ServerMessageRouter(
-                Map.of(ConnectionRole.WORKER, workerHandler), notImplemented);
+                Map.of(
+                        ConnectionRole.CLIENT, clientHandler,
+                        ConnectionRole.WORKER, workerHandler),
+                notImplemented);
         CentralServer server = new CentralServer(config, router);
         WorkerLivenessMonitor livenessMonitor = new WorkerLivenessMonitor(
                 workerRegistry,

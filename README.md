@@ -65,6 +65,13 @@ automatski prijavljuje serveru. Worker pre konačnog statusa šalje deklarisane
 izlazne datoteke, `stdout` i `stderr` serveru i čeka potvrdu prijema za svaku od
 njih. Server rezultate čuva odvojeno po zadatku u `server-data/results`.
 
+Klijentski modul sada ima mrežni `JobClient` koji serveru šalje jednu ili više
+specifikacija posla, dobija stabilne identifikatore i zatim strimuje odgovarajuće
+JAR i ulazne datoteke. I klijent i server proveravaju da imena lokalnih datoteka
+odgovaraju deklaraciji posla. Server primljene poslove čuva u `server-data/jobs`,
+odvojeno po Job ID-ju, i smatra ih kompletnim tek kada primi JAR i sve deklarisane
+ulazne datoteke. Povezivanje kompletnih poslova sa schedulerom je naredni korak.
+
 Ručna provera iz IntelliJ IDEA:
 
 1. Pokrenuti `rs.ac.bg.etf.kdp.server.ServerMain` iz modula `kdp-server`.
