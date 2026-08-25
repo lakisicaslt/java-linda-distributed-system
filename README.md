@@ -41,6 +41,11 @@ kapacitetom i šalje joj `ASSIGN_TASK`. Worker pamti zadatak i odgovara porukom
 `TASK_ACCEPTED` sa istim request ID-jem. Ako konekcija nestane pre pokretanja,
 zadatak se automatski vraća u red.
 
+JAR i ulazne datoteke šalju se od servera ka workeru u delovima od najviše 64 KiB.
+Worker ih upisuje direktno na disk u direktorijum zadatka i potvrđuje završen prenos.
+Nepotpuna privremena datoteka briše se ako se prenos prekine, tako da veliki fajlovi
+ne ostaju ni u memoriji ni kao neupotrebljivi privremeni resursi.
+
 Ručna provera iz IntelliJ IDEA:
 
 1. Pokrenuti `rs.ac.bg.etf.kdp.server.ServerMain` iz modula `kdp-server`.

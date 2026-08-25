@@ -8,6 +8,7 @@ import rs.ac.bg.etf.kdp.common.protocol.ProtocolFrame;
 import rs.ac.bg.etf.kdp.common.protocol.ProtocolFrameCodec;
 import rs.ac.bg.etf.kdp.common.protocol.ProtocolHandshake;
 import rs.ac.bg.etf.kdp.common.protocol.ProtocolSockets;
+import rs.ac.bg.etf.kdp.common.protocol.ReceivedFile;
 import rs.ac.bg.etf.kdp.common.protocol.TaskAssignmentMessage;
 import rs.ac.bg.etf.kdp.common.protocol.TaskProtocolCodec;
 import rs.ac.bg.etf.kdp.common.protocol.WorkerProtocolCodec;
@@ -19,7 +20,9 @@ import java.io.OutputStream;
 import java.net.InetAddress;
 import java.net.Socket;
 import java.net.UnknownHostException;
+import java.nio.file.Path;
 import java.util.Objects;
+import java.util.Optional;
 import java.util.Set;
 import java.util.UUID;
 import java.util.concurrent.ConcurrentHashMap;
@@ -46,6 +49,7 @@ public final class WorkerClient implements AutoCloseable {
     private final AtomicBoolean running = new AtomicBoolean();
     private final CountDownLatch stopped = new CountDownLatch(1);
     private final Set<UUID> assignedTaskIds = ConcurrentHashMap.newKeySet();
+    private final WorkerFileStore fileStore;
 
     private volatile Socket socket;
     private volatile InputStream input;
@@ -59,6 +63,7 @@ public final class WorkerClient implements AutoCloseable {
     public WorkerClient(WorkerConfig config, WorkerTaskHandler taskHandler) {
         this.config = Objects.requireNonNull(config, "worker config must not be null");
         this.taskHandler = Objects.requireNonNull(taskHandler, "task handler must not be null");
+        this.fileStore = new WorkerFileStore(config.getWorkDirectory(), assignedTaskIds);
     }
 
     public synchronized void start() throws IOException {
@@ -100,6 +105,10 @@ public final class WorkerClient implements AutoCloseable {
 
     public Set<UUID> getAssignedTaskIds() {
         return Set.copyOf(assignedTaskIds);
+    }
+
+    public Path getTaskDirectory(UUID taskId) {
+        return fileStore.taskDirectory(taskId);
     }
 
     private void performHandshake() throws IOException {
@@ -177,6 +186,10 @@ public final class WorkerClient implements AutoCloseable {
                     break;
                 } else if (frame.getType() == MessageType.ASSIGN_TASK) {
                     acceptAssignment(frame);
+                } else if (frame.getType() == MessageType.FILE_BEGIN
+                        || frame.getType() == MessageType.FILE_CHUNK
+                        || frame.getType() == MessageType.FILE_END) {
+                    receiveFile(frame);
                 } else {
                     throw new ProtocolException(
                             ProtocolError.INVALID_MESSAGE_PAYLOAD,
@@ -189,6 +202,13 @@ public final class WorkerClient implements AutoCloseable {
             }
         } finally {
             close();
+        }
+    }
+
+    private void receiveFile(ProtocolFrame frame) throws IOException {
+        Optional<ReceivedFile> receivedFile = fileStore.accept(frame);
+        if (receivedFile.isPresent()) {
+            send(receivedFile.get().getAcknowledgement());
         }
     }
 
@@ -237,6 +257,7 @@ public final class WorkerClient implements AutoCloseable {
         Socket connectedSocket = socket;
         socket = null;
         closeSocket(connectedSocket);
+        fileStore.close();
         stopped.countDown();
     }
 

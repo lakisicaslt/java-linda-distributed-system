@@ -2,14 +2,20 @@ package rs.ac.bg.etf.kdp.server;
 
 import rs.ac.bg.etf.kdp.common.domain.Task;
 import rs.ac.bg.etf.kdp.common.domain.TaskStatus;
+import rs.ac.bg.etf.kdp.common.protocol.FileTransferMetadata;
+import rs.ac.bg.etf.kdp.common.protocol.FileTransferProtocolCodec;
+import rs.ac.bg.etf.kdp.common.protocol.FileTransferSender;
 import rs.ac.bg.etf.kdp.common.protocol.MessageType;
 import rs.ac.bg.etf.kdp.common.protocol.ProtocolError;
 import rs.ac.bg.etf.kdp.common.protocol.ProtocolException;
 import rs.ac.bg.etf.kdp.common.protocol.ProtocolFrame;
 import rs.ac.bg.etf.kdp.common.protocol.TaskAssignmentMessage;
 import rs.ac.bg.etf.kdp.common.protocol.TaskProtocolCodec;
+import rs.ac.bg.etf.kdp.common.protocol.TransferFileKind;
 
 import java.io.IOException;
+import java.nio.file.Files;
+import java.nio.file.Path;
 import java.time.Clock;
 import java.util.ArrayDeque;
 import java.util.HashMap;
@@ -27,10 +33,14 @@ public final class TaskScheduler {
     private final WorkerRegistry workerRegistry;
     private final Clock clock;
     private final TaskProtocolCodec taskCodec = new TaskProtocolCodec();
+    private final FileTransferProtocolCodec fileCodec = new FileTransferProtocolCodec();
+    private final FileTransferSender fileSender = new FileTransferSender();
     private final ArrayDeque<Task> readyTasks = new ArrayDeque<>();
     private final Map<UUID, Task> tasks = new LinkedHashMap<>();
     private final Map<UUID, Task> pendingAcceptances = new HashMap<>();
     private final Set<UUID> acceptedTaskIds = new HashSet<>();
+    private final Map<UUID, Task> pendingFileTransfers = new HashMap<>();
+    private final Set<UUID> acknowledgedFileTransfers = new HashSet<>();
 
     public TaskScheduler(WorkerRegistry workerRegistry) {
         this(workerRegistry, Clock.systemUTC());
@@ -105,6 +115,68 @@ public final class TaskScheduler {
                 readyTasks.addLast(task);
             }
         }
+        pendingFileTransfers.entrySet().removeIf(entry -> entry.getValue()
+                .getAssignedWorkerId()
+                .filter(disconnectedWorkerId.get()::equals)
+                .isPresent());
+    }
+
+    public synchronized UUID sendFile(
+            UUID taskId,
+            Path source,
+            TransferFileKind kind,
+            String remoteFileName) throws IOException {
+        Objects.requireNonNull(taskId, "task id must not be null");
+        Objects.requireNonNull(source, "source path must not be null");
+        Objects.requireNonNull(kind, "file kind must not be null");
+        if (kind != TransferFileKind.JOB_ARCHIVE && kind != TransferFileKind.INPUT) {
+            throw new IllegalArgumentException(
+                    "server can send only a job archive or an input file to a worker");
+        }
+        Task task = tasks.get(taskId);
+        if (task == null) {
+            throw new IllegalArgumentException("task is not known to the scheduler");
+        }
+        if (!acceptedTaskIds.contains(taskId)) {
+            throw new IllegalStateException("worker must accept the task before file transfer");
+        }
+        UUID workerId = task.getAssignedWorkerId().orElseThrow();
+        ServerConnection connection = workerRegistry.findConnection(workerId)
+                .orElseThrow(() -> new IOException("assigned worker is no longer connected"));
+        FileTransferMetadata metadata = new FileTransferMetadata(
+                taskId, kind, remoteFileName, Files.size(source));
+        UUID transferId = UUID.randomUUID();
+        pendingFileTransfers.put(transferId, task);
+        try {
+            fileSender.send(transferId, source, metadata, connection::send);
+        } catch (IOException | RuntimeException exception) {
+            pendingFileTransfers.remove(transferId);
+            throw exception;
+        }
+        return transferId;
+    }
+
+    public synchronized void acknowledgeFile(
+            ServerConnection connection,
+            ProtocolFrame frame) throws ProtocolException {
+        fileCodec.verifyAcknowledgement(frame, frame.getRequestId());
+        Task task = pendingFileTransfers.get(frame.getRequestId());
+        if (task == null) {
+            throw new ProtocolException(
+                    ProtocolError.CORRELATION_MISMATCH,
+                    "File acknowledgement does not match a pending transfer");
+        }
+        UUID workerId = workerRegistry.findWorkerId(connection).orElseThrow(() ->
+                new ProtocolException(
+                        ProtocolError.INVALID_MESSAGE_PAYLOAD,
+                        "Unregistered worker cannot acknowledge a file"));
+        if (!task.getAssignedWorkerId().filter(workerId::equals).isPresent()) {
+            throw new ProtocolException(
+                    ProtocolError.CORRELATION_MISMATCH,
+                    "File was sent to a different worker");
+        }
+        pendingFileTransfers.remove(frame.getRequestId());
+        acknowledgedFileTransfers.add(frame.getRequestId());
     }
 
     public synchronized int getReadyTaskCount() {
@@ -118,6 +190,11 @@ public final class TaskScheduler {
     public synchronized boolean isAccepted(UUID taskId) {
         Objects.requireNonNull(taskId, "task id must not be null");
         return acceptedTaskIds.contains(taskId);
+    }
+
+    public synchronized boolean isFileAcknowledged(UUID transferId) {
+        Objects.requireNonNull(transferId, "transfer id must not be null");
+        return acknowledgedFileTransfers.contains(transferId);
     }
 
     private void dispatchAvailableTasks() throws IOException {

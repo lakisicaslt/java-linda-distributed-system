@@ -50,6 +50,8 @@ public final class WorkerSessionHandler implements ServerMessageHandler {
                 heartbeat(connection, frame);
             } else if (frame.getType() == MessageType.TASK_ACCEPTED) {
                 scheduler.accept(connection, frame);
+            } else if (frame.getType() == MessageType.FILE_ACKNOWLEDGED) {
+                scheduler.acknowledgeFile(connection, frame);
             } else {
                 throw new ProtocolException(
                         ProtocolError.INVALID_MESSAGE_PAYLOAD,

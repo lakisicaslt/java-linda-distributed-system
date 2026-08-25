@@ -82,3 +82,25 @@ posebna poruka `TASK_STARTED`.
 Scheduler ne dodeljuje više zadataka od kapaciteta koji je worker prijavio. Ako se
 worker diskonektuje dok je zadatak još u statusu `SCHEDULED`, rezervacija se uklanja
 i zadatak se vraća u status `READY` kako bi mogao da bude dodeljen drugom workeru.
+
+## Prenos datoteka
+
+Jedan prenos koristi isti request ID u svim porukama i ima sledeći redosled:
+
+```text
+FILE_BEGIN -> FILE_CHUNK ... -> FILE_END -> FILE_ACKNOWLEDGED
+```
+
+`FILE_BEGIN` sadrži ID zadatka ili posla kome datoteka pripada, vrstu datoteke,
+očekivanu veličinu i jednostavno ime datoteke. Putanje kao `../file` nisu dozvoljene.
+Sadržaj svakog `FILE_CHUNK` frame-a ima najviše 64 KiB. TCP čuva redosled poruka,
+pa se primljeni bajtovi redom upisuju direktno u privremenu datoteku.
+
+`FILE_END` je ispravan samo kada se broj primljenih bajtova poklapa sa veličinom iz
+`FILE_BEGIN`. Tada se privremena datoteka preimenuje i primalac šalje praznu poruku
+`FILE_ACKNOWLEDGED`. Ako se veza prekine, nezavršena `.part` datoteka se briše.
+
+Vrste datoteka su:
+
+- `JOB_ARCHIVE` i `INPUT` za smer server -> worker;
+- `OUTPUT`, `STANDARD_OUTPUT` i `STANDARD_ERROR` za smer worker -> server.

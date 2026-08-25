@@ -128,6 +128,14 @@ public final class WorkerRegistry {
         return Optional.ofNullable(sessions.get(connection));
     }
 
+    public synchronized Optional<ServerConnection> findConnection(UUID workerId) {
+        Objects.requireNonNull(workerId, "worker id must not be null");
+        return sessions.entrySet().stream()
+                .filter(entry -> entry.getValue().equals(workerId))
+                .map(Map.Entry::getKey)
+                .findFirst();
+    }
+
     public synchronized Optional<Worker> find(UUID workerId) {
         Objects.requireNonNull(workerId, "worker id must not be null");
         return Optional.ofNullable(workers.get(workerId));

@@ -2,6 +2,7 @@ package rs.ac.bg.etf.kdp.worker;
 
 import rs.ac.bg.etf.kdp.common.protocol.ProtocolConstants;
 
+import java.nio.file.Path;
 import java.util.Objects;
 import java.util.UUID;
 
@@ -17,6 +18,7 @@ public final class WorkerConfig {
     private final int connectTimeoutMillis;
     private final int handshakeTimeoutMillis;
     private final int heartbeatIntervalMillis;
+    private final Path workDirectory;
 
     public WorkerConfig(
             String serverHost,
@@ -26,6 +28,26 @@ public final class WorkerConfig {
             int connectTimeoutMillis,
             int handshakeTimeoutMillis,
             int heartbeatIntervalMillis) {
+        this(
+                serverHost,
+                serverPort,
+                workerId,
+                capacity,
+                connectTimeoutMillis,
+                handshakeTimeoutMillis,
+                heartbeatIntervalMillis,
+                Path.of("worker-work"));
+    }
+
+    public WorkerConfig(
+            String serverHost,
+            int serverPort,
+            UUID workerId,
+            int capacity,
+            int connectTimeoutMillis,
+            int handshakeTimeoutMillis,
+            int heartbeatIntervalMillis,
+            Path workDirectory) {
         Objects.requireNonNull(serverHost, "server host must not be null");
         if (serverHost.isBlank()) {
             throw new IllegalArgumentException("server host must not be blank");
@@ -46,6 +68,10 @@ public final class WorkerConfig {
         this.connectTimeoutMillis = connectTimeoutMillis;
         this.handshakeTimeoutMillis = handshakeTimeoutMillis;
         this.heartbeatIntervalMillis = heartbeatIntervalMillis;
+        this.workDirectory = Objects.requireNonNull(
+                workDirectory, "work directory must not be null")
+                .toAbsolutePath()
+                .normalize();
     }
 
     public static WorkerConfig defaults(String serverHost, int serverPort, int capacity) {
@@ -85,6 +111,10 @@ public final class WorkerConfig {
 
     public int getHeartbeatIntervalMillis() {
         return heartbeatIntervalMillis;
+    }
+
+    public Path getWorkDirectory() {
+        return workDirectory;
     }
 
     private static void requirePositive(int value, String fieldName) {
