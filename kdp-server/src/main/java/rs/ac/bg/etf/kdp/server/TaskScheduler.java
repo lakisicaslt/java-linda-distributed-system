@@ -1,5 +1,6 @@
 package rs.ac.bg.etf.kdp.server;
 
+import rs.ac.bg.etf.kdp.common.domain.JobSpecification;
 import rs.ac.bg.etf.kdp.common.domain.Task;
 import rs.ac.bg.etf.kdp.common.domain.TaskStatus;
 import rs.ac.bg.etf.kdp.common.protocol.FileTransferMetadata;
@@ -10,6 +11,8 @@ import rs.ac.bg.etf.kdp.common.protocol.ProtocolError;
 import rs.ac.bg.etf.kdp.common.protocol.ProtocolException;
 import rs.ac.bg.etf.kdp.common.protocol.ProtocolFrame;
 import rs.ac.bg.etf.kdp.common.protocol.TaskAssignmentMessage;
+import rs.ac.bg.etf.kdp.common.protocol.TaskExecutionMessage;
+import rs.ac.bg.etf.kdp.common.protocol.TaskExecutionProtocolCodec;
 import rs.ac.bg.etf.kdp.common.protocol.TaskFailureMessage;
 import rs.ac.bg.etf.kdp.common.protocol.TaskProtocolCodec;
 import rs.ac.bg.etf.kdp.common.protocol.TransferFileKind;
@@ -34,12 +37,14 @@ public final class TaskScheduler {
     private final WorkerRegistry workerRegistry;
     private final Clock clock;
     private final TaskProtocolCodec taskCodec = new TaskProtocolCodec();
+    private final TaskExecutionProtocolCodec executionCodec = new TaskExecutionProtocolCodec();
     private final FileTransferProtocolCodec fileCodec = new FileTransferProtocolCodec();
     private final FileTransferSender fileSender = new FileTransferSender();
     private final ArrayDeque<Task> readyTasks = new ArrayDeque<>();
     private final Map<UUID, Task> tasks = new LinkedHashMap<>();
     private final Map<UUID, Task> pendingAcceptances = new HashMap<>();
     private final Set<UUID> acceptedTaskIds = new HashSet<>();
+    private final Set<UUID> executionRequestedTaskIds = new HashSet<>();
     private final Map<UUID, Task> pendingFileTransfers = new HashMap<>();
     private final Set<UUID> acknowledgedFileTransfers = new HashSet<>();
 
@@ -113,6 +118,7 @@ public final class TaskScheduler {
                     || task.getStatus() == TaskStatus.RUNNING)) {
                 removePendingAcceptance(task.getId());
                 acceptedTaskIds.remove(task.getId());
+                executionRequestedTaskIds.remove(task.getId());
                 workerRegistry.releaseTask(task);
                 task.markFailed(clock.instant(), "Worker disconnected");
             }
@@ -143,7 +149,52 @@ public final class TaskScheduler {
         UUID taskId = taskCodec.decodeTaskReference(frame.getPayload());
         Task task = assignedTask(connection, taskId);
         requireAccepted(taskId);
+        if (!executionRequestedTaskIds.contains(taskId)) {
+            throw new ProtocolException(
+                    ProtocolError.INVALID_MESSAGE_PAYLOAD,
+                    "Server did not request execution of this task");
+        }
         task.markRunning(clock.instant());
+    }
+
+    public synchronized void requestExecution(
+            UUID taskId,
+            JobSpecification specification) throws IOException {
+        Objects.requireNonNull(taskId, "task id must not be null");
+        Objects.requireNonNull(specification, "job specification must not be null");
+        Task task = tasks.get(taskId);
+        if (task == null) {
+            throw new IllegalArgumentException("task is not known to the scheduler");
+        }
+        if (task.getStatus() != TaskStatus.SCHEDULED || !acceptedTaskIds.contains(taskId)) {
+            throw new IllegalStateException("worker must accept the task before execution");
+        }
+        if (executionRequestedTaskIds.contains(taskId)) {
+            throw new IllegalStateException("task execution has already been requested");
+        }
+        boolean transferInProgress = pendingFileTransfers.values().stream()
+                .anyMatch(pendingTask -> pendingTask.getId().equals(taskId));
+        if (transferInProgress) {
+            throw new IllegalStateException(
+                    "all task files must be acknowledged before execution");
+        }
+
+        UUID workerId = task.getAssignedWorkerId().orElseThrow();
+        ServerConnection connection = workerRegistry.findConnection(workerId)
+                .orElseThrow(() -> new IOException("assigned worker is no longer connected"));
+        ProtocolFrame request = ProtocolFrame.request(
+                MessageType.EXECUTE_TASK,
+                executionCodec.encode(new TaskExecutionMessage(taskId, specification)));
+        executionRequestedTaskIds.add(taskId);
+        try {
+            connection.send(request);
+        } catch (IOException exception) {
+            executionRequestedTaskIds.remove(taskId);
+            workerRegistry.releaseTask(task);
+            acceptedTaskIds.remove(taskId);
+            task.markFailed(clock.instant(), "Could not request task execution");
+            throw exception;
+        }
     }
 
     public synchronized void finishTask(
@@ -311,6 +362,7 @@ public final class TaskScheduler {
     private void completeAssignment(Task task) {
         workerRegistry.releaseTask(task);
         acceptedTaskIds.remove(task.getId());
+        executionRequestedTaskIds.remove(task.getId());
         pendingFileTransfers.entrySet().removeIf(
                 entry -> entry.getValue().getId().equals(task.getId()));
     }

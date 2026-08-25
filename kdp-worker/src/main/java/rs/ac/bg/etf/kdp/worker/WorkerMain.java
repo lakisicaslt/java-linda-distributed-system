@@ -2,14 +2,17 @@ package rs.ac.bg.etf.kdp.worker;
 
 import rs.ac.bg.etf.kdp.common.protocol.ProtocolConstants;
 
+import java.nio.file.Path;
+
 public final class WorkerMain {
 
     private WorkerMain() {
     }
 
     public static void main(String[] args) throws Exception {
-        if (args.length > 3) {
-            System.err.println("Usage: WorkerMain [server-host] [server-port] [capacity]");
+        if (args.length > 4) {
+            System.err.println(
+                    "Usage: WorkerMain [server-host] [server-port] [capacity] [linda-library]");
             return;
         }
 
@@ -20,6 +23,9 @@ public final class WorkerMain {
         int capacity = args.length >= 3
                 ? Integer.parseInt(args[2])
                 : Math.max(1, Runtime.getRuntime().availableProcessors());
+        Path lindaLibrary = args.length >= 4
+                ? Path.of(args[3])
+                : Path.of("kdp-linda.jar");
 
         WorkerConfig config = new WorkerConfig(
                 host,
@@ -28,7 +34,9 @@ public final class WorkerMain {
                 capacity,
                 ProtocolConstants.CONNECT_TIMEOUT_MILLIS,
                 ProtocolConstants.HANDSHAKE_TIMEOUT_MILLIS,
-                WorkerConfig.DEFAULT_HEARTBEAT_INTERVAL_MILLIS);
+                WorkerConfig.DEFAULT_HEARTBEAT_INTERVAL_MILLIS,
+                Path.of("worker-work"),
+                lindaLibrary);
         WorkerClient worker = new WorkerClient(config);
         Runtime.getRuntime().addShutdownHook(
                 new Thread(worker::close, "kdp-worker-shutdown"));

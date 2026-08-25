@@ -1,6 +1,7 @@
 package rs.ac.bg.etf.kdp.server;
 
 import org.junit.jupiter.api.Test;
+import rs.ac.bg.etf.kdp.common.domain.JobSpecification;
 import rs.ac.bg.etf.kdp.common.domain.Task;
 import rs.ac.bg.etf.kdp.common.domain.TaskStatus;
 import rs.ac.bg.etf.kdp.common.protocol.ConnectionRole;
@@ -22,6 +23,7 @@ import java.net.Socket;
 import java.time.Clock;
 import java.time.Instant;
 import java.time.ZoneOffset;
+import java.util.List;
 import java.util.UUID;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
@@ -171,6 +173,7 @@ class TaskSchedulerTest {
         scheduler.accept(target.connection, assignment.reply(
                 MessageType.TASK_ACCEPTED,
                 taskCodec.encodeTaskReference(task.getId())));
+        scheduler.requestExecution(task.getId(), specification());
         Task waitingTask = newTask();
         scheduler.submit(waitingTask);
         assertEquals(TaskStatus.READY, waitingTask.getStatus());
@@ -203,6 +206,7 @@ class TaskSchedulerTest {
         scheduler.accept(target.connection, assignment.reply(
                 MessageType.TASK_ACCEPTED,
                 taskCodec.encodeTaskReference(task.getId())));
+        scheduler.requestExecution(task.getId(), specification());
 
         scheduler.failTask(target.connection, ProtocolFrame.request(
                 MessageType.TASK_FAILED,
@@ -226,6 +230,7 @@ class TaskSchedulerTest {
         scheduler.accept(assignedWorker.connection, assignment.reply(
                 MessageType.TASK_ACCEPTED,
                 taskCodec.encodeTaskReference(task.getId())));
+        scheduler.requestExecution(task.getId(), specification());
         ConnectionOutput differentWorker = registeredWorker(registry, 1);
 
         assertProtocolError(ProtocolError.CORRELATION_MISMATCH, () ->
@@ -246,6 +251,11 @@ class TaskSchedulerTest {
 
     private static Task newTask() {
         return Task.root(UUID.randomUUID(), UUID.randomUUID(), "Main task", NOW);
+    }
+
+    private static JobSpecification specification() {
+        return new JobSpecification(
+                "job.jar", List.of(), List.of(), List.of(), List.of());
     }
 
     private static OutputStream failingOutput() {

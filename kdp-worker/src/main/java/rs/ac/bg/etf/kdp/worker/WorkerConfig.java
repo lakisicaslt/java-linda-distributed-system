@@ -19,6 +19,7 @@ public final class WorkerConfig {
     private final int handshakeTimeoutMillis;
     private final int heartbeatIntervalMillis;
     private final Path workDirectory;
+    private final Path lindaLibrary;
 
     public WorkerConfig(
             String serverHost,
@@ -36,7 +37,8 @@ public final class WorkerConfig {
                 connectTimeoutMillis,
                 handshakeTimeoutMillis,
                 heartbeatIntervalMillis,
-                Path.of("worker-work"));
+                Path.of("worker-work"),
+                Path.of("kdp-linda.jar"));
     }
 
     public WorkerConfig(
@@ -48,6 +50,28 @@ public final class WorkerConfig {
             int handshakeTimeoutMillis,
             int heartbeatIntervalMillis,
             Path workDirectory) {
+        this(
+                serverHost,
+                serverPort,
+                workerId,
+                capacity,
+                connectTimeoutMillis,
+                handshakeTimeoutMillis,
+                heartbeatIntervalMillis,
+                workDirectory,
+                Path.of("kdp-linda.jar"));
+    }
+
+    public WorkerConfig(
+            String serverHost,
+            int serverPort,
+            UUID workerId,
+            int capacity,
+            int connectTimeoutMillis,
+            int handshakeTimeoutMillis,
+            int heartbeatIntervalMillis,
+            Path workDirectory,
+            Path lindaLibrary) {
         Objects.requireNonNull(serverHost, "server host must not be null");
         if (serverHost.isBlank()) {
             throw new IllegalArgumentException("server host must not be blank");
@@ -70,6 +94,10 @@ public final class WorkerConfig {
         this.heartbeatIntervalMillis = heartbeatIntervalMillis;
         this.workDirectory = Objects.requireNonNull(
                 workDirectory, "work directory must not be null")
+                .toAbsolutePath()
+                .normalize();
+        this.lindaLibrary = Objects.requireNonNull(
+                lindaLibrary, "Linda library path must not be null")
                 .toAbsolutePath()
                 .normalize();
     }
@@ -115,6 +143,10 @@ public final class WorkerConfig {
 
     public Path getWorkDirectory() {
         return workDirectory;
+    }
+
+    public Path getLindaLibrary() {
+        return lindaLibrary;
     }
 
     private static void requirePositive(int value, String fieldName) {

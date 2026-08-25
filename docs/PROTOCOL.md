@@ -85,6 +85,11 @@ worker diskonektuje dok mu je zadatak dodeljen ili se izvršava, rezervacija se
 uklanja, a zadatak prelazi u status `FAILED`. Zadatak se ne vraća automatski u red:
 korisnik bira da li se prekinuti deo ponavlja ili se odustaje od celog posla.
 
+Nakon što worker potvrdi dodelu i prijem svih datoteka, server šalje `EXECUTE_TASK`.
+Payload sadrži Task ID, ime JAR-a, JVM argumente, programske argumente i liste
+ulaznih i izlaznih datoteka. Server ne šalje ovu poruku dok postoji prenos datoteke
+za taj zadatak koji worker još nije potvrdio.
+
 ## Status izvršavanja zadatka
 
 Nakon `TASK_ACCEPTED`, worker prijavljuje promene statusa sledećim porukama:

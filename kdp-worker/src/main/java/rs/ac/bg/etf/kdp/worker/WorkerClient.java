@@ -10,10 +10,14 @@ import rs.ac.bg.etf.kdp.common.protocol.ProtocolHandshake;
 import rs.ac.bg.etf.kdp.common.protocol.ProtocolSockets;
 import rs.ac.bg.etf.kdp.common.protocol.ReceivedFile;
 import rs.ac.bg.etf.kdp.common.protocol.TaskAssignmentMessage;
+import rs.ac.bg.etf.kdp.common.protocol.TaskExecutionMessage;
+import rs.ac.bg.etf.kdp.common.protocol.TaskExecutionProtocolCodec;
 import rs.ac.bg.etf.kdp.common.protocol.TaskFailureMessage;
 import rs.ac.bg.etf.kdp.common.protocol.TaskProtocolCodec;
 import rs.ac.bg.etf.kdp.common.protocol.WorkerProtocolCodec;
 import rs.ac.bg.etf.kdp.common.protocol.WorkerRegistrationMessage;
+import rs.ac.bg.etf.kdp.runner.JavaTaskResult;
+import rs.ac.bg.etf.kdp.runner.JavaTaskRunner;
 
 import java.io.IOException;
 import java.io.InputStream;
@@ -28,7 +32,9 @@ import java.util.Set;
 import java.util.UUID;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
+import java.util.concurrent.RejectedExecutionException;
 import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
@@ -45,17 +51,21 @@ public final class WorkerClient implements AutoCloseable {
     private final ProtocolFrameCodec frameCodec = new ProtocolFrameCodec();
     private final WorkerProtocolCodec workerCodec = new WorkerProtocolCodec();
     private final TaskProtocolCodec taskCodec = new TaskProtocolCodec();
+    private final TaskExecutionProtocolCodec executionCodec = new TaskExecutionProtocolCodec();
     private final ProtocolHandshake handshake = new ProtocolHandshake();
     private final Object writeLock = new Object();
     private final AtomicBoolean running = new AtomicBoolean();
     private final CountDownLatch stopped = new CountDownLatch(1);
     private final Set<UUID> assignedTaskIds = ConcurrentHashMap.newKeySet();
+    private final Set<UUID> executingTaskIds = ConcurrentHashMap.newKeySet();
     private final WorkerFileStore fileStore;
+    private final JavaTaskRunner taskRunner = new JavaTaskRunner();
 
     private volatile Socket socket;
     private volatile InputStream input;
     private volatile OutputStream output;
     private volatile ScheduledExecutorService heartbeatExecutor;
+    private volatile ExecutorService taskExecutor;
 
     public WorkerClient(WorkerConfig config) {
         this(config, assignment -> { });
@@ -85,6 +95,7 @@ public final class WorkerClient implements AutoCloseable {
             registerWorker();
             connectedSocket.setSoTimeout(0);
             running.set(true);
+            startTaskExecutor();
             startHeartbeat();
             startReader();
         } catch (IOException | RuntimeException exception) {
@@ -121,18 +132,19 @@ public final class WorkerClient implements AutoCloseable {
 
     public void reportTaskFinished(UUID taskId) throws IOException {
         requireAssignedTask(taskId);
+        assignedTaskIds.remove(taskId);
         send(ProtocolFrame.request(
                 MessageType.TASK_FINISHED,
                 taskCodec.encodeTaskReference(taskId)));
-        assignedTaskIds.remove(taskId);
     }
 
     public void reportTaskFailed(UUID taskId, String reason) throws IOException {
         requireAssignedTask(taskId);
+        byte[] payload = taskCodec.encodeFailure(new TaskFailureMessage(taskId, reason));
+        assignedTaskIds.remove(taskId);
         send(ProtocolFrame.request(
                 MessageType.TASK_FAILED,
-                taskCodec.encodeFailure(new TaskFailureMessage(taskId, reason))));
-        assignedTaskIds.remove(taskId);
+                payload));
     }
 
     private void performHandshake() throws IOException {
@@ -210,6 +222,8 @@ public final class WorkerClient implements AutoCloseable {
                     break;
                 } else if (frame.getType() == MessageType.ASSIGN_TASK) {
                     acceptAssignment(frame);
+                } else if (frame.getType() == MessageType.EXECUTE_TASK) {
+                    executeTask(frame);
                 } else if (frame.getType() == MessageType.FILE_BEGIN
                         || frame.getType() == MessageType.FILE_CHUNK
                         || frame.getType() == MessageType.FILE_END) {
@@ -263,10 +277,84 @@ public final class WorkerClient implements AutoCloseable {
                 taskCodec.encodeTaskReference(assignment.getTaskId())));
     }
 
+    private void executeTask(ProtocolFrame frame) throws ProtocolException {
+        TaskExecutionMessage execution = executionCodec.decode(frame.getPayload());
+        UUID taskId = execution.getTaskId();
+        if (!assignedTaskIds.contains(taskId)) {
+            throw new ProtocolException(
+                    ProtocolError.INVALID_MESSAGE_PAYLOAD,
+                    "Server requested execution of a task that is not assigned to this worker");
+        }
+        if (!executingTaskIds.add(taskId)) {
+            throw new ProtocolException(
+                    ProtocolError.INVALID_MESSAGE_PAYLOAD,
+                    "Task execution has already started");
+        }
+
+        try {
+            taskExecutor.submit(() -> runTask(execution));
+        } catch (RejectedExecutionException exception) {
+            executingTaskIds.remove(taskId);
+            throw new ProtocolException(
+                    ProtocolError.INVALID_MESSAGE_PAYLOAD,
+                    "Worker is shutting down and cannot start the task",
+                    exception);
+        }
+    }
+
+    private void runTask(TaskExecutionMessage execution) {
+        UUID taskId = execution.getTaskId();
+        try {
+            reportTaskStarted(taskId);
+            JavaTaskResult result = taskRunner.run(
+                    execution.getSpecification(),
+                    fileStore.taskDirectory(taskId),
+                    config.getLindaLibrary());
+            if (result.isSuccessful()) {
+                reportTaskFinished(taskId);
+            } else {
+                reportTaskFailed(
+                        taskId, "Java process exited with code " + result.getExitCode());
+            }
+        } catch (InterruptedException exception) {
+            Thread.currentThread().interrupt();
+            reportExecutionFailure(taskId, "Task execution was interrupted", exception);
+        } catch (IOException | RuntimeException exception) {
+            String reason = exception.getMessage();
+            if (reason == null || reason.isBlank()) {
+                reason = exception.getClass().getSimpleName();
+            }
+            reportExecutionFailure(taskId, reason, exception);
+        } finally {
+            executingTaskIds.remove(taskId);
+        }
+    }
+
+    private void reportExecutionFailure(UUID taskId, String reason, Exception cause) {
+        if (!running.get() || !assignedTaskIds.contains(taskId)) {
+            return;
+        }
+        try {
+            reportTaskFailed(taskId, reason);
+        } catch (IOException | RuntimeException reportingException) {
+            LOGGER.log(Level.FINE, "Could not report task execution failure", reportingException);
+            close();
+        }
+        LOGGER.log(Level.FINE, "Task execution failed", cause);
+    }
+
     private void send(ProtocolFrame frame) throws IOException {
         synchronized (writeLock) {
             frameCodec.write(output, frame);
         }
+    }
+
+    private void startTaskExecutor() {
+        taskExecutor = Executors.newFixedThreadPool(config.getCapacity(), task -> {
+            Thread thread = new Thread(task, "kdp-worker-task");
+            thread.setDaemon(true);
+            return thread;
+        });
     }
 
     private void requireAssignedTask(UUID taskId) {
@@ -284,6 +372,10 @@ public final class WorkerClient implements AutoCloseable {
         ScheduledExecutorService executor = heartbeatExecutor;
         if (executor != null) {
             executor.shutdownNow();
+        }
+        ExecutorService executionExecutor = taskExecutor;
+        if (executionExecutor != null) {
+            executionExecutor.shutdownNow();
         }
         Socket connectedSocket = socket;
         socket = null;

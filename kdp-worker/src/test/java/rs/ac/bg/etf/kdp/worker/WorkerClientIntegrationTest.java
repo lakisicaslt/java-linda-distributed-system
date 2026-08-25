@@ -3,6 +3,7 @@ package rs.ac.bg.etf.kdp.worker;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
+import rs.ac.bg.etf.kdp.common.domain.JobSpecification;
 import rs.ac.bg.etf.kdp.common.domain.Task;
 import rs.ac.bg.etf.kdp.common.domain.TaskStatus;
 import rs.ac.bg.etf.kdp.common.domain.Worker;
@@ -16,13 +17,21 @@ import rs.ac.bg.etf.kdp.server.WorkerRegistry;
 import rs.ac.bg.etf.kdp.server.WorkerSessionHandler;
 import rs.ac.bg.etf.kdp.server.WorkerLivenessMonitor;
 
+import java.io.IOException;
+import java.io.InputStream;
+import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.time.Instant;
+import java.util.List;
 import java.util.UUID;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicReference;
 import java.util.function.BooleanSupplier;
+import java.util.jar.Attributes;
+import java.util.jar.JarEntry;
+import java.util.jar.JarOutputStream;
+import java.util.jar.Manifest;
 
 import static org.junit.jupiter.api.Assertions.assertArrayEquals;
 import static org.junit.jupiter.api.Assertions.assertEquals;
@@ -163,7 +172,7 @@ class WorkerClientIntegrationTest {
     }
 
     @Test
-    void reportsTaskExecutionLifecycleToServer() throws Exception {
+    void transfersAndExecutesJavaTask() throws Exception {
         WorkerRegistry registry = new WorkerRegistry();
         TaskScheduler scheduler = new TaskScheduler(registry);
         server = new CentralServer(
@@ -171,6 +180,11 @@ class WorkerClientIntegrationTest {
                 new WorkerSessionHandler(registry, scheduler));
         server.start();
 
+        Path jobArchive = temporaryDirectory.resolve("test-job.jar");
+        createJobArchive(jobArchive);
+        Path inputFile = temporaryDirectory.resolve("input.txt");
+        Files.writeString(inputFile, "distributed execution", StandardCharsets.UTF_8);
+        Path lindaLibrary = Files.createFile(temporaryDirectory.resolve("kdp-linda.jar"));
         UUID workerId = UUID.randomUUID();
         WorkerConfig config = new WorkerConfig(
                 "127.0.0.1",
@@ -180,24 +194,38 @@ class WorkerClientIntegrationTest {
                 ProtocolConstants.CONNECT_TIMEOUT_MILLIS,
                 ProtocolConstants.HANDSHAKE_TIMEOUT_MILLIS,
                 100,
-                temporaryDirectory.resolve("lifecycle-worker"));
-        AtomicReference<UUID> receivedTaskId = new AtomicReference<>();
-        client = new WorkerClient(
-                config,
-                assignment -> receivedTaskId.set(assignment.getTaskId()));
+                temporaryDirectory.resolve("execution-worker"),
+                lindaLibrary);
+        client = new WorkerClient(config);
         client.start();
 
         Task task = Task.root(
-                UUID.randomUUID(), UUID.randomUUID(), "Lifecycle task", Instant.now());
+                UUID.randomUUID(), UUID.randomUUID(), "Execution task", Instant.now());
         scheduler.submit(task);
         assertTrue(await(() -> scheduler.isAccepted(task.getId())));
-        assertEquals(task.getId(), receivedTaskId.get());
+        UUID jarTransfer = scheduler.sendFile(
+                task.getId(), jobArchive, TransferFileKind.JOB_ARCHIVE, "test-job.jar");
+        assertTrue(await(() -> scheduler.isFileAcknowledged(jarTransfer)));
+        UUID inputTransfer = scheduler.sendFile(
+                task.getId(), inputFile, TransferFileKind.INPUT, "input.txt");
+        assertTrue(await(() -> scheduler.isFileAcknowledged(inputTransfer)));
 
-        client.reportTaskStarted(task.getId());
-        assertTrue(await(() -> task.getStatus() == TaskStatus.RUNNING));
+        JobSpecification specification = new JobSpecification(
+                "test-job.jar",
+                List.of(),
+                List.of("result.txt"),
+                List.of("input.txt"),
+                List.of("result.txt"));
+        scheduler.requestExecution(task.getId(), specification);
 
-        client.reportTaskFinished(task.getId());
         assertTrue(await(() -> task.getStatus() == TaskStatus.DONE));
+        Path taskDirectory = client.getTaskDirectory(task.getId());
+        assertEquals("DISTRIBUTED EXECUTION", Files.readString(
+                taskDirectory.resolve("result.txt"), StandardCharsets.UTF_8));
+        assertTrue(Files.readString(taskDirectory.resolve(".kdp").resolve("stdout.txt"))
+                .contains(lindaLibrary.toAbsolutePath().toString()));
+        assertTrue(Files.readString(taskDirectory.resolve(".kdp").resolve("stderr.txt"))
+                .contains("test stderr"));
         assertTrue(client.getAssignedTaskIds().isEmpty());
         assertTrue(registry.find(workerId).orElseThrow().getActiveTaskIds().isEmpty());
     }
@@ -231,11 +259,71 @@ class WorkerClientIntegrationTest {
         assertTrue(await(() -> !client.isRunning()));
     }
 
+    @Test
+    void reportsExecutionFailureWithoutAutomaticRetry() throws Exception {
+        WorkerRegistry registry = new WorkerRegistry();
+        TaskScheduler scheduler = new TaskScheduler(registry);
+        server = new CentralServer(
+                new ServerConfig("127.0.0.1", 0, 10, 4, 1_000),
+                new WorkerSessionHandler(registry, scheduler));
+        server.start();
+
+        Path lindaLibrary = Files.createFile(
+                temporaryDirectory.resolve("failure-kdp-linda.jar"));
+        WorkerConfig config = new WorkerConfig(
+                "127.0.0.1",
+                server.getLocalPort(),
+                UUID.randomUUID(),
+                1,
+                ProtocolConstants.CONNECT_TIMEOUT_MILLIS,
+                ProtocolConstants.HANDSHAKE_TIMEOUT_MILLIS,
+                100,
+                temporaryDirectory.resolve("failing-worker"),
+                lindaLibrary);
+        client = new WorkerClient(config);
+        client.start();
+
+        Task task = Task.root(
+                UUID.randomUUID(), UUID.randomUUID(), "Missing JAR task", Instant.now());
+        scheduler.submit(task);
+        assertTrue(await(() -> scheduler.isAccepted(task.getId())));
+        scheduler.requestExecution(task.getId(), new JobSpecification(
+                "missing.jar", List.of(), List.of(), List.of(), List.of()));
+
+        assertTrue(await(() -> task.getStatus() == TaskStatus.FAILED));
+        assertTrue(
+                task.getFailureReason().contains("does not exist"),
+                () -> "Unexpected failure reason: " + task.getFailureReason());
+        assertEquals(0, scheduler.getReadyTaskCount());
+        assertTrue(client.getAssignedTaskIds().isEmpty());
+    }
+
     private static boolean await(BooleanSupplier condition) throws InterruptedException {
-        long deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(2);
+        long deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(5);
         while (!condition.getAsBoolean() && System.nanoTime() < deadline) {
             Thread.sleep(10);
         }
         return condition.getAsBoolean();
+    }
+
+    private static void createJobArchive(Path target) throws IOException {
+        Manifest manifest = new Manifest();
+        manifest.getMainAttributes().put(Attributes.Name.MANIFEST_VERSION, "1.0");
+        manifest.getMainAttributes().put(
+                Attributes.Name.MAIN_CLASS, WorkerExecutionTestProgram.class.getName());
+
+        String classEntryName = WorkerExecutionTestProgram.class.getName()
+                .replace('.', '/') + ".class";
+        try (InputStream classBytes = WorkerExecutionTestProgram.class.getClassLoader()
+                .getResourceAsStream(classEntryName);
+             JarOutputStream archive = new JarOutputStream(
+                     Files.newOutputStream(target), manifest)) {
+            if (classBytes == null) {
+                throw new IOException("Could not find compiled test program");
+            }
+            archive.putNextEntry(new JarEntry(classEntryName));
+            classBytes.transferTo(archive);
+            archive.closeEntry();
+        }
     }
 }

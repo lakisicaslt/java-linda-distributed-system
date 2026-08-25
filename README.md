@@ -58,6 +58,12 @@ poslednji programski argument. `stdout` i `stderr` čuvaju se odvojeno u direkto
 `.kdp`, a izlazni kod procesa određuje da li je izvršavanje bilo uspešno. Uspešan
 proces mora da napravi sve izlazne datoteke koje je korisnik naveo.
 
+Server posle potvrđenog prenosa datoteka šalje workeru `EXECUTE_TASK` sa
+specifikacijom komande. Worker izvršavanje prebacuje na poseban skup niti, pa mrežna
+nit i heartbeat ostaju aktivni dok korisnički JAR radi. Po završetku se status
+automatski prijavljuje serveru. Izlazne datoteke su u ovoj fazi prikupljene na
+workeru; njihov povratni prenos ka serveru je sledeći korak.
+
 Ručna provera iz IntelliJ IDEA:
 
 1. Pokrenuti `rs.ac.bg.etf.kdp.server.ServerMain` iz modula `kdp-server`.
@@ -67,8 +73,10 @@ Ručna provera iz IntelliJ IDEA:
 `WorkerMain` prima opcione argumente:
 
 ```text
-WorkerMain [server-host] [server-port] [capacity]
+WorkerMain [server-host] [server-port] [capacity] [linda-library]
 ```
 
-Ovo je potpuno headless pokretanje. Swing interfejs će kasnije koristiti isti
-`WorkerClient`, tako da mrežna logika neće biti duplirana.
+Četvrti argument je putanja do lokalnog `kdp-linda.jar`; podrazumevana vrednost je
+`kdp-linda.jar` u trenutnom direktorijumu. Ovo je potpuno headless pokretanje.
+Swing interfejs će kasnije koristiti isti `WorkerClient`, tako da mrežna logika neće
+biti duplirana.
