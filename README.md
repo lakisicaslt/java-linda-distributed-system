@@ -42,6 +42,8 @@ Rezultat su direktorijum `dist` i prenosiva arhiva
 headless worker, Linda biblioteku, demo JAR-ove i konfiguracije za javne testove.
 Detaljan postupak nalazi se u
 [`docs/LABORATORY_PREPARATION.md`](docs/LABORATORY_PREPARATION.md).
+Matrica zahteva, implementacije i provera nalazi se u
+[`docs/SPECIFICATION_COMPLIANCE.md`](docs/SPECIFICATION_COMPLIANCE.md).
 
 ## Trenutno funkcionalan tok
 

@@ -49,7 +49,12 @@ public final class LocalLinda implements Linda {
 
     @Override
     public void eval(String name, Runnable thread) {
-        throw new UnsupportedOperationException("Distributed eval is not implemented yet");
+        Objects.requireNonNull(name, "eval name must not be null");
+        Objects.requireNonNull(thread, "eval runnable must not be null");
+        if (name.isBlank()) {
+            throw new IllegalArgumentException("eval name must not be blank");
+        }
+        new Thread(thread, name.trim()).start();
     }
 
     private String[] waitForMatch(String[] template, boolean remove) {

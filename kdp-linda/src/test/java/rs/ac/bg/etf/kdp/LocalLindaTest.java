@@ -2,14 +2,16 @@ package rs.ac.bg.etf.kdp;
 
 import org.junit.jupiter.api.Test;
 
+import java.util.UUID;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.Future;
 import java.util.concurrent.TimeUnit;
-import java.util.UUID;
+import java.util.concurrent.atomic.AtomicReference;
 
 import static org.junit.jupiter.api.Assertions.assertArrayEquals;
+import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
@@ -76,6 +78,21 @@ class LocalLindaTest {
         assertThrows(NullPointerException.class,
                 () -> linda.out(new String[]{"value", null}));
         assertThrows(NullPointerException.class, () -> linda.in(null));
+    }
+
+    @Test
+    void evalStartsNamedThread() throws Exception {
+        LocalLinda linda = new LocalLinda();
+        CountDownLatch finished = new CountDownLatch(1);
+        AtomicReference<String> threadName = new AtomicReference<>();
+
+        linda.eval("local calculation", () -> {
+            threadName.set(Thread.currentThread().getName());
+            finished.countDown();
+        });
+
+        assertTrue(finished.await(1, TimeUnit.SECONDS));
+        assertEquals("local calculation", threadName.get());
     }
 
     @Test

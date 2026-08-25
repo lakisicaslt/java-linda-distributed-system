@@ -64,8 +64,8 @@ public final class ServerRuntime implements AutoCloseable {
             ClientSessionHandler clientHandler = new ClientSessionHandler(
                     jobStore, taskScheduler, resultStore);
             LindaSessionHandler lindaHandler = new LindaSessionHandler(jobStore, taskScheduler);
-            ServerMessageHandler notImplemented = (connection, frame) -> {
-                String message = "Message is not implemented yet: " + frame.getType();
+            ServerMessageHandler unsupportedMessage = (connection, frame) -> {
+                String message = "Unsupported message: " + frame.getType();
                 connection.send(frame.reply(
                         MessageType.ERROR, message.getBytes(StandardCharsets.UTF_8)));
             };
@@ -74,7 +74,7 @@ public final class ServerRuntime implements AutoCloseable {
                             ConnectionRole.CLIENT, clientHandler,
                             ConnectionRole.WORKER, workerHandler,
                             ConnectionRole.LINDA, lindaHandler),
-                    notImplemented);
+                    unsupportedMessage);
             CentralServer server = new CentralServer(config, router);
             WorkerLivenessMonitor monitor = new WorkerLivenessMonitor(
                     workerRegistry,

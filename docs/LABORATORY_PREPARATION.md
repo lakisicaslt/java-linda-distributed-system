@@ -137,8 +137,9 @@ radne stanice. Očekivani sadržaj izlaza je:
 computed remotely|demo calculation
 ```
 
-Serverski GUI treba da pokaže da su korenski i `eval` zadatak raspoređeni na
-slobodne radne stanice.
+Tokom izvršavanja na kartici *Radne stanice* serverskog GUI-ja može se pratiti
+zauzeće obe radne stanice. Automatizovani integracioni test dodatno proverava da
+korenski i `eval` zadatak nisu dodeljeni istoj radnoj stanici.
 
 ## Šta poneti u laboratoriju
 
