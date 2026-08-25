@@ -12,6 +12,7 @@ import rs.ac.bg.etf.kdp.common.protocol.ProtocolConstants;
 import rs.ac.bg.etf.kdp.common.protocol.TransferFileKind;
 import rs.ac.bg.etf.kdp.server.CentralServer;
 import rs.ac.bg.etf.kdp.server.ServerConfig;
+import rs.ac.bg.etf.kdp.server.ServerTaskResultStore;
 import rs.ac.bg.etf.kdp.server.TaskScheduler;
 import rs.ac.bg.etf.kdp.server.WorkerRegistry;
 import rs.ac.bg.etf.kdp.server.WorkerSessionHandler;
@@ -175,9 +176,11 @@ class WorkerClientIntegrationTest {
     void transfersAndExecutesJavaTask() throws Exception {
         WorkerRegistry registry = new WorkerRegistry();
         TaskScheduler scheduler = new TaskScheduler(registry);
+        ServerTaskResultStore resultStore = new ServerTaskResultStore(
+                temporaryDirectory.resolve("server-results"));
         server = new CentralServer(
                 new ServerConfig("127.0.0.1", 0, 10, 4, 1_000),
-                new WorkerSessionHandler(registry, scheduler));
+                new WorkerSessionHandler(registry, scheduler, resultStore));
         server.start();
 
         Path jobArchive = temporaryDirectory.resolve("test-job.jar");
@@ -225,6 +228,16 @@ class WorkerClientIntegrationTest {
         assertTrue(Files.readString(taskDirectory.resolve(".kdp").resolve("stdout.txt"))
                 .contains(lindaLibrary.toAbsolutePath().toString()));
         assertTrue(Files.readString(taskDirectory.resolve(".kdp").resolve("stderr.txt"))
+                .contains("test stderr"));
+        Path serverTaskDirectory = resultStore.taskDirectory(task.getId());
+        assertEquals("DISTRIBUTED EXECUTION", Files.readString(
+                serverTaskDirectory.resolve("outputs").resolve("result.txt"),
+                StandardCharsets.UTF_8));
+        assertTrue(Files.readString(
+                serverTaskDirectory.resolve("streams").resolve("stdout.txt"))
+                .contains(lindaLibrary.toAbsolutePath().toString()));
+        assertTrue(Files.readString(
+                serverTaskDirectory.resolve("streams").resolve("stderr.txt"))
                 .contains("test stderr"));
         assertTrue(client.getAssignedTaskIds().isEmpty());
         assertTrue(registry.find(workerId).orElseThrow().getActiveTaskIds().isEmpty());

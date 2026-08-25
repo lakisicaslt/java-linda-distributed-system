@@ -62,9 +62,18 @@ public final class JavaTaskRunner {
             throw exception;
         }
 
-        List<Path> outputFiles = collectOutputFiles(specification, workingDirectory, exitCode);
+        List<Path> outputFiles = specification.getOutputFileNames().stream()
+                .map(workingDirectory::resolve)
+                .toList();
+        List<Path> missingOutputFiles = exitCode == 0
+                ? outputFiles.stream().filter(path -> !Files.isRegularFile(path)).toList()
+                : List.of();
         return new JavaTaskResult(
-                exitCode, standardOutput, standardError, outputFiles);
+                exitCode,
+                standardOutput,
+                standardError,
+                outputFiles,
+                missingOutputFiles);
     }
 
     private List<String> buildCommand(
@@ -87,24 +96,6 @@ public final class JavaTaskRunner {
         for (String inputFileName : specification.getInputFileNames()) {
             requireRegularFile(taskDirectory.resolve(inputFileName), "input file");
         }
-    }
-
-    private static List<Path> collectOutputFiles(
-            JobSpecification specification,
-            Path taskDirectory,
-            int exitCode) throws IOException {
-        List<Path> outputFiles = specification.getOutputFileNames().stream()
-                .map(taskDirectory::resolve)
-                .toList();
-        if (exitCode == 0) {
-            for (Path outputFile : outputFiles) {
-                if (!Files.isRegularFile(outputFile)) {
-                    throw new IOException(
-                            "Declared output file was not created: " + outputFile.getFileName());
-                }
-            }
-        }
-        return outputFiles;
     }
 
     private static Path requireDirectory(Path path, String description) {

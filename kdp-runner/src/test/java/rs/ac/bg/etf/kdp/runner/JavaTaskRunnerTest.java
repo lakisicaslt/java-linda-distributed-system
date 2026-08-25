@@ -76,13 +76,20 @@ class JavaTaskRunnerTest {
     }
 
     @Test
-    void rejectsSuccessfulProcessThatDidNotCreateDeclaredOutput() throws Exception {
+    void reportsMissingDeclaredOutputAsFailedResult() throws Exception {
         createJobArchive(taskDirectory.resolve("test-job.jar"));
         Path lindaLibrary = Files.createFile(taskDirectory.resolve("kdp-linda.jar"));
         Files.writeString(taskDirectory.resolve("input.txt"), "input-content");
 
-        assertThrows(IOException.class, () ->
-                runner.run(specification("no-output"), taskDirectory, lindaLibrary));
+        JavaTaskResult result = runner.run(
+                specification("no-output"), taskDirectory, lindaLibrary);
+
+        assertFalse(result.isSuccessful());
+        assertEquals(
+                List.of(taskDirectory.resolve("result.txt").toAbsolutePath()),
+                result.getMissingOutputFiles());
+        assertTrue(Files.isRegularFile(result.getStandardOutput()));
+        assertTrue(Files.isRegularFile(result.getStandardError()));
     }
 
     private static JobSpecification specification(String mode) {

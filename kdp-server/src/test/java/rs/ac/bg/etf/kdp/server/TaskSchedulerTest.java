@@ -5,6 +5,7 @@ import rs.ac.bg.etf.kdp.common.domain.JobSpecification;
 import rs.ac.bg.etf.kdp.common.domain.Task;
 import rs.ac.bg.etf.kdp.common.domain.TaskStatus;
 import rs.ac.bg.etf.kdp.common.protocol.ConnectionRole;
+import rs.ac.bg.etf.kdp.common.protocol.FileTransferMetadata;
 import rs.ac.bg.etf.kdp.common.protocol.MessageType;
 import rs.ac.bg.etf.kdp.common.protocol.ProtocolError;
 import rs.ac.bg.etf.kdp.common.protocol.ProtocolException;
@@ -13,6 +14,7 @@ import rs.ac.bg.etf.kdp.common.protocol.ProtocolFrameCodec;
 import rs.ac.bg.etf.kdp.common.protocol.TaskAssignmentMessage;
 import rs.ac.bg.etf.kdp.common.protocol.TaskFailureMessage;
 import rs.ac.bg.etf.kdp.common.protocol.TaskProtocolCodec;
+import rs.ac.bg.etf.kdp.common.protocol.TransferFileKind;
 import rs.ac.bg.etf.kdp.common.protocol.WorkerRegistrationMessage;
 
 import java.io.ByteArrayInputStream;
@@ -26,6 +28,7 @@ import java.time.ZoneOffset;
 import java.util.List;
 import java.util.UUID;
 
+import static org.junit.jupiter.api.Assertions.assertDoesNotThrow;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertThrows;
@@ -240,6 +243,33 @@ class TaskSchedulerTest {
         assertEquals(TaskStatus.SCHEDULED, task.getStatus());
     }
 
+    @Test
+    void acceptsOnlyDeclaredResultsFromAssignedWorker() throws Exception {
+        WorkerRegistry registry = new WorkerRegistry(clock);
+        TaskScheduler scheduler = new TaskScheduler(registry, clock);
+        ConnectionOutput target = registeredWorker(registry, 1);
+        Task task = newTask();
+        scheduler.submit(task);
+        ProtocolFrame assignment = target.readFrame();
+        scheduler.accept(target.connection, assignment.reply(
+                MessageType.TASK_ACCEPTED,
+                taskCodec.encodeTaskReference(task.getId())));
+        scheduler.requestExecution(task.getId(), specification());
+        scheduler.startTask(target.connection, ProtocolFrame.request(
+                MessageType.TASK_STARTED,
+                taskCodec.encodeTaskReference(task.getId())));
+
+        assertDoesNotThrow(() -> scheduler.validateResultTransfer(
+                target.connection,
+                new FileTransferMetadata(
+                        task.getId(), TransferFileKind.OUTPUT, "result.txt", 10)));
+        assertProtocolError(ProtocolError.INVALID_MESSAGE_PAYLOAD, () ->
+                scheduler.validateResultTransfer(
+                        target.connection,
+                        new FileTransferMetadata(
+                                task.getId(), TransferFileKind.OUTPUT, "extra.txt", 10)));
+    }
+
     private ConnectionOutput registeredWorker(WorkerRegistry registry, int capacity) {
         ByteArrayOutputStream output = new ByteArrayOutputStream();
         ServerConnection connection = new ServerConnection(
@@ -255,7 +285,7 @@ class TaskSchedulerTest {
 
     private static JobSpecification specification() {
         return new JobSpecification(
-                "job.jar", List.of(), List.of(), List.of(), List.of());
+                "job.jar", List.of(), List.of(), List.of(), List.of("result.txt"));
     }
 
     private static OutputStream failingOutput() {

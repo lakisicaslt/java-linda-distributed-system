@@ -61,8 +61,9 @@ proces mora da napravi sve izlazne datoteke koje je korisnik naveo.
 Server posle potvrđenog prenosa datoteka šalje workeru `EXECUTE_TASK` sa
 specifikacijom komande. Worker izvršavanje prebacuje na poseban skup niti, pa mrežna
 nit i heartbeat ostaju aktivni dok korisnički JAR radi. Po završetku se status
-automatski prijavljuje serveru. Izlazne datoteke su u ovoj fazi prikupljene na
-workeru; njihov povratni prenos ka serveru je sledeći korak.
+automatski prijavljuje serveru. Worker pre konačnog statusa šalje deklarisane
+izlazne datoteke, `stdout` i `stderr` serveru i čeka potvrdu prijema za svaku od
+njih. Server rezultate čuva odvojeno po zadatku u `server-data/results`.
 
 Ručna provera iz IntelliJ IDEA:
 

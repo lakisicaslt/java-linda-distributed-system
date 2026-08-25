@@ -1,6 +1,9 @@
 package rs.ac.bg.etf.kdp.worker;
 
 import rs.ac.bg.etf.kdp.common.protocol.ConnectionRole;
+import rs.ac.bg.etf.kdp.common.protocol.FileTransferMetadata;
+import rs.ac.bg.etf.kdp.common.protocol.FileTransferProtocolCodec;
+import rs.ac.bg.etf.kdp.common.protocol.FileTransferSender;
 import rs.ac.bg.etf.kdp.common.protocol.MessageType;
 import rs.ac.bg.etf.kdp.common.protocol.ProtocolError;
 import rs.ac.bg.etf.kdp.common.protocol.ProtocolException;
@@ -14,6 +17,7 @@ import rs.ac.bg.etf.kdp.common.protocol.TaskExecutionMessage;
 import rs.ac.bg.etf.kdp.common.protocol.TaskExecutionProtocolCodec;
 import rs.ac.bg.etf.kdp.common.protocol.TaskFailureMessage;
 import rs.ac.bg.etf.kdp.common.protocol.TaskProtocolCodec;
+import rs.ac.bg.etf.kdp.common.protocol.TransferFileKind;
 import rs.ac.bg.etf.kdp.common.protocol.WorkerProtocolCodec;
 import rs.ac.bg.etf.kdp.common.protocol.WorkerRegistrationMessage;
 import rs.ac.bg.etf.kdp.runner.JavaTaskResult;
@@ -25,14 +29,18 @@ import java.io.OutputStream;
 import java.net.InetAddress;
 import java.net.Socket;
 import java.net.UnknownHostException;
+import java.nio.file.Files;
 import java.nio.file.Path;
+import java.util.Map;
 import java.util.Objects;
 import java.util.Optional;
 import java.util.Set;
 import java.util.UUID;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.ExecutorService;
+import java.util.concurrent.ExecutionException;
 import java.util.concurrent.Executors;
 import java.util.concurrent.RejectedExecutionException;
 import java.util.concurrent.ScheduledExecutorService;
@@ -52,12 +60,17 @@ public final class WorkerClient implements AutoCloseable {
     private final WorkerProtocolCodec workerCodec = new WorkerProtocolCodec();
     private final TaskProtocolCodec taskCodec = new TaskProtocolCodec();
     private final TaskExecutionProtocolCodec executionCodec = new TaskExecutionProtocolCodec();
+    private final FileTransferProtocolCodec fileCodec = new FileTransferProtocolCodec();
+    private final FileTransferSender fileSender = new FileTransferSender();
     private final ProtocolHandshake handshake = new ProtocolHandshake();
     private final Object writeLock = new Object();
+    private final Object resultTransferLock = new Object();
     private final AtomicBoolean running = new AtomicBoolean();
     private final CountDownLatch stopped = new CountDownLatch(1);
     private final Set<UUID> assignedTaskIds = ConcurrentHashMap.newKeySet();
     private final Set<UUID> executingTaskIds = ConcurrentHashMap.newKeySet();
+    private final Map<UUID, CompletableFuture<Void>> pendingResultTransfers =
+            new ConcurrentHashMap<>();
     private final WorkerFileStore fileStore;
     private final JavaTaskRunner taskRunner = new JavaTaskRunner();
 
@@ -224,6 +237,8 @@ public final class WorkerClient implements AutoCloseable {
                     acceptAssignment(frame);
                 } else if (frame.getType() == MessageType.EXECUTE_TASK) {
                     executeTask(frame);
+                } else if (frame.getType() == MessageType.FILE_ACKNOWLEDGED) {
+                    acknowledgeResultFile(frame);
                 } else if (frame.getType() == MessageType.FILE_BEGIN
                         || frame.getType() == MessageType.FILE_CHUNK
                         || frame.getType() == MessageType.FILE_END) {
@@ -310,11 +325,11 @@ public final class WorkerClient implements AutoCloseable {
                     execution.getSpecification(),
                     fileStore.taskDirectory(taskId),
                     config.getLindaLibrary());
+            sendTaskResults(taskId, result);
             if (result.isSuccessful()) {
                 reportTaskFinished(taskId);
             } else {
-                reportTaskFailed(
-                        taskId, "Java process exited with code " + result.getExitCode());
+                reportTaskFailed(taskId, executionFailureReason(result));
             }
         } catch (InterruptedException exception) {
             Thread.currentThread().interrupt();
@@ -328,6 +343,91 @@ public final class WorkerClient implements AutoCloseable {
         } finally {
             executingTaskIds.remove(taskId);
         }
+    }
+
+    private void sendTaskResults(UUID taskId, JavaTaskResult result)
+            throws IOException, InterruptedException {
+        sendResultFile(
+                taskId,
+                result.getStandardOutput(),
+                TransferFileKind.STANDARD_OUTPUT,
+                "stdout.txt");
+        sendResultFile(
+                taskId,
+                result.getStandardError(),
+                TransferFileKind.STANDARD_ERROR,
+                "stderr.txt");
+        for (Path outputFile : result.getOutputFiles()) {
+            if (Files.isRegularFile(outputFile)) {
+                sendResultFile(
+                        taskId,
+                        outputFile,
+                        TransferFileKind.OUTPUT,
+                        outputFile.getFileName().toString());
+            }
+        }
+    }
+
+    private static String executionFailureReason(JavaTaskResult result) {
+        if (result.getExitCode() != 0) {
+            return "Java process exited with code " + result.getExitCode();
+        }
+        Path missingOutput = result.getMissingOutputFiles().get(0);
+        return "Declared output file was not created: " + missingOutput.getFileName();
+    }
+
+    private void sendResultFile(
+            UUID taskId,
+            Path source,
+            TransferFileKind kind,
+            String remoteFileName) throws IOException, InterruptedException {
+        synchronized (resultTransferLock) {
+            sendResultFileAndWaitForAcknowledgement(
+                    taskId, source, kind, remoteFileName);
+        }
+    }
+
+    private void sendResultFileAndWaitForAcknowledgement(
+            UUID taskId,
+            Path source,
+            TransferFileKind kind,
+            String remoteFileName) throws IOException, InterruptedException {
+        UUID transferId = UUID.randomUUID();
+        CompletableFuture<Void> acknowledgement = new CompletableFuture<>();
+        pendingResultTransfers.put(transferId, acknowledgement);
+        FileTransferMetadata metadata = new FileTransferMetadata(
+                taskId, kind, remoteFileName, Files.size(source));
+        try {
+            fileSender.send(transferId, source, metadata, this::send);
+        } catch (IOException | RuntimeException exception) {
+            pendingResultTransfers.remove(transferId);
+            throw exception;
+        }
+
+        try {
+            acknowledgement.get();
+        } catch (ExecutionException exception) {
+            Throwable cause = exception.getCause();
+            if (cause instanceof IOException ioException) {
+                throw ioException;
+            }
+            throw new IOException("Result transfer acknowledgement failed", cause);
+        } finally {
+            pendingResultTransfers.remove(transferId);
+        }
+    }
+
+    private void acknowledgeResultFile(ProtocolFrame frame) throws ProtocolException {
+        CompletableFuture<Void> acknowledgement = pendingResultTransfers.get(
+                frame.getRequestId());
+        if (acknowledgement == null) {
+            throw new ProtocolException(
+                    ProtocolError.CORRELATION_MISMATCH,
+                    "File acknowledgement does not match a result transfer");
+        }
+        fileCodec.verifyAcknowledgement(frame, frame.getRequestId());
+        pendingResultTransfers.remove(frame.getRequestId(), acknowledgement);
+        acknowledgement.complete(null);
     }
 
     private void reportExecutionFailure(UUID taskId, String reason, Exception cause) {
@@ -377,6 +477,10 @@ public final class WorkerClient implements AutoCloseable {
         if (executionExecutor != null) {
             executionExecutor.shutdownNow();
         }
+        IOException closedException = new IOException("Worker connection closed");
+        pendingResultTransfers.values().forEach(
+                acknowledgement -> acknowledgement.completeExceptionally(closedException));
+        pendingResultTransfers.clear();
         Socket connectedSocket = socket;
         socket = null;
         closeSocket(connectedSocket);

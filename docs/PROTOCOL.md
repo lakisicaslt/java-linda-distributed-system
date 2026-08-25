@@ -103,6 +103,10 @@ Server prihvata ove poruke samo od workera kome je zadatak dodeljen. Posle poruk
 workera. Neuspešan zadatak se ne stavlja automatski u red; novi pokušaj nastaje tek
 nakon izričite odluke korisnika.
 
+Pre konačne statusne poruke worker prenosi `stdout`, `stderr` i postojeće
+deklarisane izlazne datoteke. Za svaku datoteku čeka `FILE_ACKNOWLEDGED`, tako da
+`TASK_FINISHED` ne može stići pre nego što server sačuva sve očekivane rezultate.
+
 ## Prenos datoteka
 
 Jedan prenos koristi isti request ID u svim porukama i ima sledeći redosled:
@@ -124,3 +128,7 @@ Vrste datoteka su:
 
 - `JOB_ARCHIVE` i `INPUT` za smer server -> worker;
 - `OUTPUT`, `STANDARD_OUTPUT` i `STANDARD_ERROR` za smer worker -> server.
+
+Server prihvata `OUTPUT` samo ako je ime datoteke navedeno u specifikaciji posla.
+Rezultate čuva po Task ID-ju, pri čemu su korisničke izlazne datoteke u direktorijumu
+`outputs`, a standardni izlazni tokovi u direktorijumu `streams`.

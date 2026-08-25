@@ -1,15 +1,20 @@
 package rs.ac.bg.etf.kdp.server;
 
 import rs.ac.bg.etf.kdp.common.protocol.ConnectionRole;
+import rs.ac.bg.etf.kdp.common.protocol.FileTransferMetadata;
+import rs.ac.bg.etf.kdp.common.protocol.FileTransferProtocolCodec;
 import rs.ac.bg.etf.kdp.common.protocol.MessageType;
 import rs.ac.bg.etf.kdp.common.protocol.ProtocolError;
 import rs.ac.bg.etf.kdp.common.protocol.ProtocolException;
 import rs.ac.bg.etf.kdp.common.protocol.ProtocolFrame;
+import rs.ac.bg.etf.kdp.common.protocol.ReceivedFile;
 import rs.ac.bg.etf.kdp.common.protocol.WorkerProtocolCodec;
 import rs.ac.bg.etf.kdp.common.protocol.WorkerRegistrationMessage;
 
 import java.io.IOException;
+import java.nio.file.Path;
 import java.util.Objects;
+import java.util.Optional;
 import java.util.UUID;
 
 /** Handles registration and liveness messages from one worker connection. */
@@ -17,15 +22,32 @@ public final class WorkerSessionHandler implements ServerMessageHandler {
 
     private final WorkerRegistry registry;
     private final TaskScheduler scheduler;
+    private final ServerTaskResultStore resultStore;
     private final WorkerProtocolCodec workerCodec = new WorkerProtocolCodec();
+    private final FileTransferProtocolCodec fileCodec = new FileTransferProtocolCodec();
 
     public WorkerSessionHandler(WorkerRegistry registry) {
-        this(registry, new TaskScheduler(registry));
+        this(
+                registry,
+                new TaskScheduler(registry),
+                new ServerTaskResultStore(Path.of("server-data", "results")));
     }
 
     public WorkerSessionHandler(WorkerRegistry registry, TaskScheduler scheduler) {
+        this(
+                registry,
+                scheduler,
+                new ServerTaskResultStore(Path.of("server-data", "results")));
+    }
+
+    public WorkerSessionHandler(
+            WorkerRegistry registry,
+            TaskScheduler scheduler,
+            ServerTaskResultStore resultStore) {
         this.registry = Objects.requireNonNull(registry, "worker registry must not be null");
         this.scheduler = Objects.requireNonNull(scheduler, "task scheduler must not be null");
+        this.resultStore = Objects.requireNonNull(
+                resultStore, "result store must not be null");
     }
 
     @Override
@@ -52,6 +74,10 @@ public final class WorkerSessionHandler implements ServerMessageHandler {
                 scheduler.finishTask(connection, frame);
             } else if (frame.getType() == MessageType.TASK_FAILED) {
                 scheduler.failTask(connection, frame);
+            } else if (frame.getType() == MessageType.FILE_BEGIN
+                    || frame.getType() == MessageType.FILE_CHUNK
+                    || frame.getType() == MessageType.FILE_END) {
+                receiveResultFile(connection, frame);
             } else if (frame.getType() == MessageType.FILE_ACKNOWLEDGED) {
                 scheduler.acknowledgeFile(connection, frame);
             } else {
@@ -67,6 +93,7 @@ public final class WorkerSessionHandler implements ServerMessageHandler {
 
     @Override
     public void onDisconnected(ServerConnection connection) {
+        resultStore.disconnect(connection);
         scheduler.workerDisconnected(connection);
         registry.disconnect(connection);
     }
@@ -82,5 +109,17 @@ public final class WorkerSessionHandler implements ServerMessageHandler {
             throws ProtocolException {
         UUID workerId = workerCodec.decodeHeartbeat(frame.getPayload());
         registry.recordHeartbeat(connection, workerId);
+    }
+
+    private void receiveResultFile(ServerConnection connection, ProtocolFrame frame)
+            throws IOException {
+        if (frame.getType() == MessageType.FILE_BEGIN) {
+            FileTransferMetadata metadata = fileCodec.decodeBegin(frame.getPayload());
+            scheduler.validateResultTransfer(connection, metadata);
+        }
+        Optional<ReceivedFile> receivedFile = resultStore.accept(connection, frame);
+        if (receivedFile.isPresent()) {
+            connection.send(receivedFile.get().getAcknowledgement());
+        }
     }
 }

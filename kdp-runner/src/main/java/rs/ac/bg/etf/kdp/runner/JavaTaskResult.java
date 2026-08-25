@@ -11,12 +11,14 @@ public final class JavaTaskResult {
     private final Path standardOutput;
     private final Path standardError;
     private final List<Path> outputFiles;
+    private final List<Path> missingOutputFiles;
 
     JavaTaskResult(
             int exitCode,
             Path standardOutput,
             Path standardError,
-            List<Path> outputFiles) {
+            List<Path> outputFiles,
+            List<Path> missingOutputFiles) {
         this.exitCode = exitCode;
         this.standardOutput = Objects.requireNonNull(
                 standardOutput, "standard output path must not be null");
@@ -24,6 +26,8 @@ public final class JavaTaskResult {
                 standardError, "standard error path must not be null");
         this.outputFiles = List.copyOf(Objects.requireNonNull(
                 outputFiles, "output files must not be null"));
+        this.missingOutputFiles = List.copyOf(Objects.requireNonNull(
+                missingOutputFiles, "missing output files must not be null"));
     }
 
     public int getExitCode() {
@@ -31,7 +35,7 @@ public final class JavaTaskResult {
     }
 
     public boolean isSuccessful() {
-        return exitCode == 0;
+        return exitCode == 0 && missingOutputFiles.isEmpty();
     }
 
     public Path getStandardOutput() {
@@ -44,5 +48,9 @@ public final class JavaTaskResult {
 
     public List<Path> getOutputFiles() {
         return outputFiles;
+    }
+
+    public List<Path> getMissingOutputFiles() {
+        return missingOutputFiles;
     }
 }

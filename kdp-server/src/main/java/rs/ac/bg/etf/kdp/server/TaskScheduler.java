@@ -45,6 +45,7 @@ public final class TaskScheduler {
     private final Map<UUID, Task> pendingAcceptances = new HashMap<>();
     private final Set<UUID> acceptedTaskIds = new HashSet<>();
     private final Set<UUID> executionRequestedTaskIds = new HashSet<>();
+    private final Map<UUID, JobSpecification> executionSpecifications = new HashMap<>();
     private final Map<UUID, Task> pendingFileTransfers = new HashMap<>();
     private final Set<UUID> acknowledgedFileTransfers = new HashSet<>();
 
@@ -119,6 +120,7 @@ public final class TaskScheduler {
                 removePendingAcceptance(task.getId());
                 acceptedTaskIds.remove(task.getId());
                 executionRequestedTaskIds.remove(task.getId());
+                executionSpecifications.remove(task.getId());
                 workerRegistry.releaseTask(task);
                 task.markFailed(clock.instant(), "Worker disconnected");
             }
@@ -186,10 +188,12 @@ public final class TaskScheduler {
                 MessageType.EXECUTE_TASK,
                 executionCodec.encode(new TaskExecutionMessage(taskId, specification)));
         executionRequestedTaskIds.add(taskId);
+        executionSpecifications.put(taskId, specification);
         try {
             connection.send(request);
         } catch (IOException exception) {
             executionRequestedTaskIds.remove(taskId);
+            executionSpecifications.remove(taskId);
             workerRegistry.releaseTask(task);
             acceptedTaskIds.remove(taskId);
             task.markFailed(clock.instant(), "Could not request task execution");
@@ -217,6 +221,34 @@ public final class TaskScheduler {
         task.markFailed(clock.instant(), failure.getReason());
         completeAssignment(task);
         dispatchAvailableTasks();
+    }
+
+    public synchronized void validateResultTransfer(
+            ServerConnection connection,
+            FileTransferMetadata metadata) throws ProtocolException {
+        Objects.requireNonNull(metadata, "file metadata must not be null");
+        Task task = assignedTask(connection, metadata.getOwnerId());
+        requireAccepted(task.getId());
+        if (task.getStatus() != TaskStatus.RUNNING
+                || !executionRequestedTaskIds.contains(task.getId())) {
+            throw new ProtocolException(
+                    ProtocolError.INVALID_MESSAGE_PAYLOAD,
+                    "Worker can send results only for a running task");
+        }
+        if (metadata.getKind() == TransferFileKind.OUTPUT) {
+            JobSpecification specification = executionSpecifications.get(task.getId());
+            if (specification == null
+                    || !specification.getOutputFileNames().contains(metadata.getFileName())) {
+                throw new ProtocolException(
+                        ProtocolError.INVALID_MESSAGE_PAYLOAD,
+                        "Worker sent an undeclared output file");
+            }
+        } else if (metadata.getKind() != TransferFileKind.STANDARD_OUTPUT
+                && metadata.getKind() != TransferFileKind.STANDARD_ERROR) {
+            throw new ProtocolException(
+                    ProtocolError.INVALID_MESSAGE_PAYLOAD,
+                    "Worker can send only task output files and captured streams");
+        }
     }
 
     public synchronized UUID sendFile(
@@ -363,6 +395,7 @@ public final class TaskScheduler {
         workerRegistry.releaseTask(task);
         acceptedTaskIds.remove(task.getId());
         executionRequestedTaskIds.remove(task.getId());
+        executionSpecifications.remove(task.getId());
         pendingFileTransfers.entrySet().removeIf(
                 entry -> entry.getValue().getId().equals(task.getId()));
     }
