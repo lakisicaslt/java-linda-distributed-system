@@ -40,6 +40,7 @@ public final class TaskScheduler {
 
     private final WorkerRegistry workerRegistry;
     private final Clock clock;
+    private final JobStatusListener statusListener;
     private final TaskProtocolCodec taskCodec = new TaskProtocolCodec();
     private final TaskExecutionProtocolCodec executionCodec = new TaskExecutionProtocolCodec();
     private final FileTransferProtocolCodec fileCodec = new FileTransferProtocolCodec();
@@ -57,13 +58,22 @@ public final class TaskScheduler {
     private final Set<UUID> acknowledgedFileTransfers = new HashSet<>();
 
     public TaskScheduler(WorkerRegistry workerRegistry) {
-        this(workerRegistry, Clock.systemUTC());
+        this(workerRegistry, Clock.systemUTC(), JobStatusListener.NONE);
     }
 
     TaskScheduler(WorkerRegistry workerRegistry, Clock clock) {
+        this(workerRegistry, clock, JobStatusListener.NONE);
+    }
+
+    TaskScheduler(
+            WorkerRegistry workerRegistry,
+            Clock clock,
+            JobStatusListener statusListener) {
         this.workerRegistry = Objects.requireNonNull(
                 workerRegistry, "worker registry must not be null");
         this.clock = Objects.requireNonNull(clock, "clock must not be null");
+        this.statusListener = Objects.requireNonNull(
+                statusListener, "job status listener must not be null");
     }
 
     public synchronized void submit(Task task) throws IOException {
@@ -231,6 +241,7 @@ public final class TaskScheduler {
             throw new IllegalStateException("only a failed job can be aborted");
         }
         scheduledJob.abort(clock.instant());
+        recordStatus(scheduledJob, scheduledJob.getRootTask());
         scheduledJob.getTasks().forEach(this::clearFailedAttempt);
     }
 
@@ -246,6 +257,7 @@ public final class TaskScheduler {
 
         Instant occurredAt = clock.instant();
         scheduledJob.retry(occurredAt);
+        recordStatus(scheduledJob, null);
         for (Task task : failedTasks) {
             clearFailedAttempt(task);
             readyTasks.addLast(task);
@@ -551,6 +563,7 @@ public final class TaskScheduler {
         Job job = jobsByTaskId.get(task.getId());
         if (job != null && job.getStatus() == JobStatus.READY) {
             job.schedule(occurredAt);
+            recordStatus(job, task);
         }
     }
 
@@ -558,6 +571,7 @@ public final class TaskScheduler {
         Job job = jobsByTaskId.get(task.getId());
         if (job != null && job.getStatus() == JobStatus.SCHEDULED) {
             job.markRunning(occurredAt);
+            recordStatus(job, task);
         }
     }
 
@@ -565,6 +579,7 @@ public final class TaskScheduler {
         Job job = jobsByTaskId.get(task.getId());
         if (job != null && job.getStatus() == JobStatus.RUNNING) {
             job.markDone(occurredAt);
+            recordStatus(job, task);
         }
     }
 
@@ -574,7 +589,17 @@ public final class TaskScheduler {
                 && (job.getStatus() == JobStatus.SCHEDULED
                 || job.getStatus() == JobStatus.RUNNING)) {
             job.markFailed(occurredAt, reason);
+            recordStatus(job, task);
         }
+    }
+
+    private void recordStatus(Job job, Task task) {
+        String workerHostname = Optional.ofNullable(task)
+                .flatMap(Task::getAssignedWorkerId)
+                .flatMap(workerRegistry::find)
+                .map(worker -> worker.getHostname())
+                .orElse(null);
+        statusListener.statusChanged(job, workerHostname);
     }
 
     private static final class PreparedExecution {

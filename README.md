@@ -92,6 +92,11 @@ Ako se worker isključi tokom izvršavanja, posao dobija status `FAILED` i razlo
 zadatak u `READY`; scheduler ga ne ponavlja samostalno i novi pokušaj dobija sledeći
 redni broj.
 
+Centralni server vodi evidenciju životnog ciklusa poslova u fajlu
+`server-data/server.log`. Za svaku promenu statusa upisuju se vreme prijema, Job ID,
+hostname dodeljene radne stanice, vreme završetka i trenutni status posla. Svaki novi
+start servera nastavlja da dopisuje u postojeći log.
+
 Ručna provera iz IntelliJ IDEA:
 
 1. Pokrenuti `rs.ac.bg.etf.kdp.server.ServerMain` iz modula `kdp-server`.

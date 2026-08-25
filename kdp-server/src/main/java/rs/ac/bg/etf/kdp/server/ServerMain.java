@@ -1,10 +1,11 @@
 package rs.ac.bg.etf.kdp.server;
 
-import rs.ac.bg.etf.kdp.common.protocol.MessageType;
 import rs.ac.bg.etf.kdp.common.protocol.ConnectionRole;
+import rs.ac.bg.etf.kdp.common.protocol.MessageType;
 
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Path;
+import java.time.Clock;
 import java.util.Map;
 
 public final class ServerMain {
@@ -21,13 +22,17 @@ public final class ServerMain {
                 ServerConfig.DEFAULT_MAX_CONNECTIONS,
                 5_000);
 
+        ServerJobLogger jobLogger = new ServerJobLogger(
+                Path.of("server-data", "server.log"));
         WorkerRegistry workerRegistry = new WorkerRegistry();
-        TaskScheduler taskScheduler = new TaskScheduler(workerRegistry);
+        TaskScheduler taskScheduler = new TaskScheduler(
+                workerRegistry, Clock.systemUTC(), jobLogger);
         ServerTaskResultStore resultStore = new ServerTaskResultStore(
                 Path.of("server-data", "results"));
         WorkerSessionHandler workerHandler = new WorkerSessionHandler(
                 workerRegistry, taskScheduler, resultStore);
-        ServerJobStore jobStore = new ServerJobStore(Path.of("server-data", "jobs"));
+        ServerJobStore jobStore = new ServerJobStore(
+                Path.of("server-data", "jobs"), Clock.systemUTC(), jobLogger);
         ClientSessionHandler clientHandler = new ClientSessionHandler(
                 jobStore, taskScheduler, resultStore);
         ServerMessageHandler notImplemented = (connection, frame) -> {
@@ -48,10 +53,12 @@ public final class ServerMain {
         Runtime.getRuntime().addShutdownHook(new Thread(() -> {
             livenessMonitor.close();
             server.close();
+            jobLogger.close();
         }, "kdp-server-shutdown"));
         server.start();
         livenessMonitor.start();
         System.out.println("KDP server listening on port " + server.getLocalPort());
         server.awaitTermination();
+        jobLogger.close();
     }
 }

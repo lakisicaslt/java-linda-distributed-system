@@ -125,6 +125,19 @@ Oba zahteva su dozvoljena samo kada je posao u statusu `FAILED`. Server potvrđu
 primenjenu odluku porukom `JOB_DECISION_ACCEPTED`, sa istim request ID-jem i Job ID-jem.
 Svako novo dodeljivanje uvećava broj pokušaja zadatka.
 
+## Serverski log poslova
+
+Server pri prijemu posla i posle svake promene njegovog statusa dopisuje jednu liniju
+u `server-data/server.log`. Linija sadrži sledeća polja:
+
+```text
+receivedAt=<vreme-prijema> jobId=<job-id> worker=<hostname-ili-> finishedAt=<vreme-završetka-ili-> status=<trenutni-status>
+```
+
+Za `READY` posao koji još nije dodeljen vrednost `worker` je `-`. Vreme završetka je
+`-` sve dok posao ne pređe u konačan status. Log se otvara u append režimu, tako da
+se prethodni zapisi ne brišu pri sledećem pokretanju servera.
+
 ## Registracija radne stanice
 
 WORKER sesija odmah nakon handshake-a šalje `REGISTER_WORKER`. Payload redom sadrži:

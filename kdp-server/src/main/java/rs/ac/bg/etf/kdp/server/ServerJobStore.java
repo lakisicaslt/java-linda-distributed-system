@@ -35,6 +35,7 @@ public final class ServerJobStore {
 
     private final Path jobDirectory;
     private final Clock clock;
+    private final JobStatusListener statusListener;
     private final FileTransferProtocolCodec fileCodec = new FileTransferProtocolCodec();
     private final Map<UUID, JobBatch> batches = new LinkedHashMap<>();
     private final Map<UUID, Job> jobs = new HashMap<>();
@@ -44,15 +45,24 @@ public final class ServerJobStore {
             new IdentityHashMap<>();
 
     public ServerJobStore(Path jobDirectory) {
-        this(jobDirectory, Clock.systemUTC());
+        this(jobDirectory, Clock.systemUTC(), JobStatusListener.NONE);
     }
 
     ServerJobStore(Path jobDirectory, Clock clock) {
+        this(jobDirectory, clock, JobStatusListener.NONE);
+    }
+
+    ServerJobStore(
+            Path jobDirectory,
+            Clock clock,
+            JobStatusListener statusListener) {
         this.jobDirectory = Objects.requireNonNull(
                 jobDirectory, "job directory must not be null")
                 .toAbsolutePath()
                 .normalize();
         this.clock = Objects.requireNonNull(clock, "clock must not be null");
+        this.statusListener = Objects.requireNonNull(
+                statusListener, "job status listener must not be null");
     }
 
     public synchronized JobBatch createBatch(List<JobSpecification> specifications)
@@ -77,6 +87,7 @@ public final class ServerJobStore {
         for (Job job : createdJobs) {
             jobs.put(job.getId(), job);
             receivedFiles.put(job.getId(), new HashSet<>());
+            statusListener.statusChanged(job, null);
         }
         return batch;
     }
