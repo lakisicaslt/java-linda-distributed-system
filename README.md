@@ -179,3 +179,12 @@ WorkerMain [server-host] [server-port] [capacity] [linda-library]
 Četvrti argument je putanja do lokalnog `kdp-linda.jar`; podrazumevana vrednost je
 `kdp-linda.jar` u trenutnom direktorijumu. Ovo je potpuno headless pokretanje.
 Swing interfejs koristi isti `WorkerClient`, tako da mrežna logika nije duplirana.
+
+## Pisani rad
+
+Završni pisani rad dostupan je u formatima
+[`DOCX`](output/report/Java_Linda_Lazar_Milojevic.docx) i
+[`PDF`](output/pdf/Java_Linda_Lazar_Milojevic.pdf). Dokument sadrži tekst zadatka,
+funkcionalnu specifikaciju, pregled arhitekture i klasa, UML dijagrame interakcije,
+uputstvo za početnike i napredne korisnike, primere testiranja, ograničenja rešenja i
+predloge za njihovo prevazilaženje.

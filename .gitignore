@@ -18,6 +18,9 @@ worker-work/
 tmp/
 *.log
 *.part
+__pycache__/
+*.pyc
+output/report/assets/
 
 # Operating systems
 .DS_Store
