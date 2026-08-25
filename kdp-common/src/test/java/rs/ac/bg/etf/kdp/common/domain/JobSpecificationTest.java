@@ -13,14 +13,12 @@ class JobSpecificationTest {
     @Test
     void createsValidSpecification() {
         JobSpecification specification = new JobSpecification(
-                "Matrix calculation",
                 "matrix-job.jar",
                 List.of("-Xmx512m"),
                 List.of("input.txt", "result.txt"),
                 List.of("input.txt"),
                 List.of("result.txt"));
 
-        assertEquals("Matrix calculation", specification.getName());
         assertEquals("matrix-job.jar", specification.getJarFileName());
         assertEquals(List.of("-Xmx512m"), specification.getJvmArguments());
         assertEquals(List.of("input.txt", "result.txt"), specification.getProgramArguments());
@@ -52,7 +50,6 @@ class JobSpecificationTest {
     @Test
     void rejectsInvalidJarFileName() {
         assertThrows(IllegalArgumentException.class, () -> new JobSpecification(
-                "Job",
                 "program.zip",
                 List.of(),
                 List.of(),
@@ -84,7 +81,6 @@ class JobSpecificationTest {
             List<String> inputFiles,
             List<String> outputFiles) {
         return new JobSpecification(
-                "Test job",
                 "test-job.jar",
                 List.of(),
                 List.of(),

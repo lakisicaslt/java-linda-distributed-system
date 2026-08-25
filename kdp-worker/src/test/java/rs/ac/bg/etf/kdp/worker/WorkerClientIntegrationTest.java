@@ -14,6 +14,7 @@ import rs.ac.bg.etf.kdp.server.ServerConfig;
 import rs.ac.bg.etf.kdp.server.TaskScheduler;
 import rs.ac.bg.etf.kdp.server.WorkerRegistry;
 import rs.ac.bg.etf.kdp.server.WorkerSessionHandler;
+import rs.ac.bg.etf.kdp.server.WorkerLivenessMonitor;
 
 import java.nio.file.Files;
 import java.nio.file.Path;
@@ -34,11 +35,15 @@ class WorkerClientIntegrationTest {
 
     private CentralServer server;
     private WorkerClient client;
+    private WorkerLivenessMonitor livenessMonitor;
 
     @AfterEach
     void cleanUp() {
         if (client != null) {
             client.close();
+        }
+        if (livenessMonitor != null) {
+            livenessMonitor.close();
         }
         if (server != null) {
             server.close();
@@ -155,6 +160,35 @@ class WorkerClientIntegrationTest {
         assertTrue(Files.isRegularFile(received));
         assertEquals(content.length, Files.size(received));
         assertArrayEquals(content, Files.readAllBytes(received));
+    }
+
+    @Test
+    void serverDisconnectsWorkerThatStopsSendingHeartbeats() throws Exception {
+        WorkerRegistry registry = new WorkerRegistry();
+        server = new CentralServer(
+                new ServerConfig("127.0.0.1", 0, 10, 4, 1_000),
+                new WorkerSessionHandler(registry));
+        server.start();
+        livenessMonitor = new WorkerLivenessMonitor(registry, 20, 100);
+        livenessMonitor.start();
+
+        UUID workerId = UUID.randomUUID();
+        WorkerConfig config = new WorkerConfig(
+                "127.0.0.1",
+                server.getLocalPort(),
+                workerId,
+                1,
+                ProtocolConstants.CONNECT_TIMEOUT_MILLIS,
+                ProtocolConstants.HANDSHAKE_TIMEOUT_MILLIS,
+                10_000,
+                temporaryDirectory.resolve("silent-worker"));
+        client = new WorkerClient(config);
+        client.start();
+
+        assertTrue(await(() -> registry.find(workerId)
+                .map(worker -> worker.getStatus() == WorkerStatus.OFFLINE)
+                .orElse(false)));
+        assertTrue(await(() -> !client.isRunning()));
     }
 
     private static boolean await(BooleanSupplier condition) throws InterruptedException {

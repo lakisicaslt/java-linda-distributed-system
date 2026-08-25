@@ -33,7 +33,7 @@ public final class JobStatusTransitions {
 
         transitions.put(JobStatus.READY, Set.of(JobStatus.SCHEDULED, JobStatus.ABORTED));
         transitions.put(JobStatus.SCHEDULED,
-                Set.of(JobStatus.READY, JobStatus.RUNNING, JobStatus.FAILED, JobStatus.ABORTED));
+                Set.of(JobStatus.RUNNING, JobStatus.FAILED, JobStatus.ABORTED));
         transitions.put(JobStatus.RUNNING,
                 Set.of(JobStatus.DONE, JobStatus.FAILED, JobStatus.ABORTED));
         transitions.put(JobStatus.FAILED, Set.of(JobStatus.READY, JobStatus.ABORTED));

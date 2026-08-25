@@ -23,11 +23,6 @@ class JobStatusTransitionsTest {
     }
 
     @Test
-    void scheduledJobCanReturnToReadyWhenAssignmentDoesNotStart() {
-        assertTrue(JobStatusTransitions.canTransition(JobStatus.SCHEDULED, JobStatus.READY));
-    }
-
-    @Test
     void terminalStatusCannotChange() {
         for (JobStatus next : JobStatus.values()) {
             assertFalse(JobStatusTransitions.canTransition(JobStatus.DONE, next));
@@ -39,6 +34,7 @@ class JobStatusTransitionsTest {
     void rejectsSkippedExecutionSteps() {
         assertFalse(JobStatusTransitions.canTransition(JobStatus.READY, JobStatus.RUNNING));
         assertFalse(JobStatusTransitions.canTransition(JobStatus.READY, JobStatus.DONE));
+        assertFalse(JobStatusTransitions.canTransition(JobStatus.SCHEDULED, JobStatus.READY));
         assertFalse(JobStatusTransitions.canTransition(JobStatus.SCHEDULED, JobStatus.DONE));
     }
 

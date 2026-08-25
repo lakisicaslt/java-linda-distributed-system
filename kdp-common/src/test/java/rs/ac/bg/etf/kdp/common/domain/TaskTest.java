@@ -69,18 +69,6 @@ class TaskTest {
     }
 
     @Test
-    void rejectedAssignmentReturnsTaskToReady() {
-        Task task = newRootTask();
-        task.assignTo(UUID.randomUUID(), CREATED_AT.plusSeconds(1));
-
-        task.returnToReady(CREATED_AT.plusSeconds(2));
-
-        assertEquals(TaskStatus.READY, task.getStatus());
-        assertTrue(task.getAssignedWorkerId().isEmpty());
-        assertEquals(1, task.getAttemptNumber());
-    }
-
-    @Test
     void cannotRunBeforeWorkerAssignment() {
         Task task = newRootTask();
 

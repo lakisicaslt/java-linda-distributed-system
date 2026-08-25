@@ -49,7 +49,7 @@ public final class Job {
         this.createdAt = Objects.requireNonNull(createdAt, "creation time must not be null");
         this.status = JobStatus.READY;
         this.lastStatusChangedAt = createdAt;
-        Task rootTask = Task.root(rootTaskId, id, specification.getName(), createdAt);
+        Task rootTask = Task.root(rootTaskId, id, specification.getJarFileName(), createdAt);
         tasks.put(rootTaskId, rootTask);
     }
 
@@ -80,11 +80,6 @@ public final class Job {
     public void schedule(Instant occurredAt) {
         transitionTo(JobStatus.SCHEDULED, occurredAt);
         scheduledAt = occurredAt;
-    }
-
-    public void returnToReady(Instant occurredAt) {
-        transitionTo(JobStatus.READY, occurredAt);
-        clearExecutionDetails();
     }
 
     public void markRunning(Instant occurredAt) {

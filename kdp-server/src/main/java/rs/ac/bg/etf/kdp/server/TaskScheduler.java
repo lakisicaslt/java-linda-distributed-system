@@ -107,18 +107,33 @@ public final class TaskScheduler {
             boolean belongsToWorker = task.getAssignedWorkerId()
                     .filter(disconnectedWorkerId.get()::equals)
                     .isPresent();
-            if (belongsToWorker && task.getStatus() == TaskStatus.SCHEDULED) {
+            if (belongsToWorker
+                    && (task.getStatus() == TaskStatus.SCHEDULED
+                    || task.getStatus() == TaskStatus.RUNNING)) {
                 removePendingAcceptance(task.getId());
                 acceptedTaskIds.remove(task.getId());
                 workerRegistry.releaseTask(task);
-                task.returnToReady(clock.instant());
-                readyTasks.addLast(task);
+                task.markFailed(clock.instant(), "Worker disconnected");
             }
         }
         pendingFileTransfers.entrySet().removeIf(entry -> entry.getValue()
                 .getAssignedWorkerId()
                 .filter(disconnectedWorkerId.get()::equals)
                 .isPresent());
+    }
+
+    public synchronized void retryTask(UUID taskId) throws IOException {
+        Objects.requireNonNull(taskId, "task id must not be null");
+        Task task = tasks.get(taskId);
+        if (task == null) {
+            throw new IllegalArgumentException("task is not known to the scheduler");
+        }
+        if (task.getStatus() != TaskStatus.FAILED) {
+            throw new IllegalStateException("only a failed task can be retried");
+        }
+        task.retry(clock.instant());
+        readyTasks.addLast(task);
+        dispatchAvailableTasks();
     }
 
     public synchronized UUID sendFile(
@@ -224,8 +239,7 @@ public final class TaskScheduler {
         } catch (IOException exception) {
             pendingAcceptances.remove(request.getRequestId());
             workerRegistry.releaseTask(task);
-            task.returnToReady(clock.instant());
-            readyTasks.addFirst(task);
+            task.markFailed(clock.instant(), "Could not send task to worker");
             throw exception;
         }
     }

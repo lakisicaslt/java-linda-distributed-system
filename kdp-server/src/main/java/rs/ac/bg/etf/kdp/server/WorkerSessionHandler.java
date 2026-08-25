@@ -11,13 +11,9 @@ import rs.ac.bg.etf.kdp.common.protocol.WorkerRegistrationMessage;
 import java.io.IOException;
 import java.util.Objects;
 import java.util.UUID;
-import java.util.logging.Level;
-import java.util.logging.Logger;
 
 /** Handles registration and liveness messages from one worker connection. */
 public final class WorkerSessionHandler implements ServerMessageHandler {
-
-    private static final Logger LOGGER = Logger.getLogger(WorkerSessionHandler.class.getName());
 
     private final WorkerRegistry registry;
     private final TaskScheduler scheduler;
@@ -67,11 +63,6 @@ public final class WorkerSessionHandler implements ServerMessageHandler {
     public void onDisconnected(ServerConnection connection) {
         scheduler.workerDisconnected(connection);
         registry.disconnect(connection);
-        try {
-            scheduler.workerAvailable();
-        } catch (IOException exception) {
-            LOGGER.log(Level.FINE, "Could not reschedule a task after disconnect", exception);
-        }
     }
 
     private void register(ServerConnection connection, ProtocolFrame frame) throws IOException {

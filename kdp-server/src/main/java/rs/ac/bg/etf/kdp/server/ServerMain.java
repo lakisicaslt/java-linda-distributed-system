@@ -31,9 +31,17 @@ public final class ServerMain {
         ServerMessageRouter router = new ServerMessageRouter(
                 Map.of(ConnectionRole.WORKER, workerHandler), notImplemented);
         CentralServer server = new CentralServer(config, router);
+        WorkerLivenessMonitor livenessMonitor = new WorkerLivenessMonitor(
+                workerRegistry,
+                WorkerLivenessMonitor.DEFAULT_CHECK_INTERVAL_MILLIS,
+                WorkerLivenessMonitor.DEFAULT_HEARTBEAT_TIMEOUT_MILLIS);
 
-        Runtime.getRuntime().addShutdownHook(new Thread(server::close, "kdp-server-shutdown"));
+        Runtime.getRuntime().addShutdownHook(new Thread(() -> {
+            livenessMonitor.close();
+            server.close();
+        }, "kdp-server-shutdown"));
         server.start();
+        livenessMonitor.start();
         System.out.println("KDP server listening on port " + server.getLocalPort());
         server.awaitTermination();
     }

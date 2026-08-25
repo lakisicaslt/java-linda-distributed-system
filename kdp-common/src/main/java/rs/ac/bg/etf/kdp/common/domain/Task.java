@@ -65,11 +65,6 @@ public final class Task {
         attemptNumber++;
     }
 
-    public void returnToReady(Instant occurredAt) {
-        transitionTo(TaskStatus.READY, occurredAt);
-        clearAttemptDetails();
-    }
-
     public void markRunning(Instant occurredAt) {
         transitionTo(TaskStatus.RUNNING, occurredAt);
         startedAt = occurredAt;

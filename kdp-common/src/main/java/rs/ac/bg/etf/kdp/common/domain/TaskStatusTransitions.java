@@ -28,7 +28,7 @@ public final class TaskStatusTransitions {
         Map<TaskStatus, Set<TaskStatus>> transitions = new EnumMap<>(TaskStatus.class);
         transitions.put(TaskStatus.READY, Set.of(TaskStatus.SCHEDULED, TaskStatus.ABORTED));
         transitions.put(TaskStatus.SCHEDULED,
-                Set.of(TaskStatus.READY, TaskStatus.RUNNING, TaskStatus.FAILED, TaskStatus.ABORTED));
+                Set.of(TaskStatus.RUNNING, TaskStatus.FAILED, TaskStatus.ABORTED));
         transitions.put(TaskStatus.RUNNING,
                 Set.of(TaskStatus.DONE, TaskStatus.FAILED, TaskStatus.ABORTED));
         transitions.put(TaskStatus.FAILED, Set.of(TaskStatus.READY, TaskStatus.ABORTED));

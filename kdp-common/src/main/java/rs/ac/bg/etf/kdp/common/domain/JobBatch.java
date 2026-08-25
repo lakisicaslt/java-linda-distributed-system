@@ -13,23 +13,17 @@ import java.util.UUID;
 public final class JobBatch {
 
     private final UUID id;
-    private final String name;
     private final Instant createdAt;
     private final List<Job> jobs;
 
-    public JobBatch(UUID id, String name, Instant createdAt, List<Job> jobs) {
+    public JobBatch(UUID id, Instant createdAt, List<Job> jobs) {
         this.id = Objects.requireNonNull(id, "batch id must not be null");
-        this.name = requireNonBlank(name, "batch name");
         this.createdAt = Objects.requireNonNull(createdAt, "creation time must not be null");
         this.jobs = copyAndValidateJobs(id, jobs);
     }
 
     public UUID getId() {
         return id;
-    }
-
-    public String getName() {
-        return name;
     }
 
     public Instant getCreatedAt() {
@@ -45,31 +39,6 @@ public final class JobBatch {
         return jobs.stream()
                 .filter(job -> job.getId().equals(jobId))
                 .findFirst();
-    }
-
-    public JobBatchStatus getStatus() {
-        boolean hasActiveJob = jobs.stream()
-                .map(Job::getStatus)
-                .anyMatch(JobBatch::isActive);
-        if (hasActiveJob) {
-            return JobBatchStatus.IN_PROGRESS;
-        }
-
-        boolean hasFailedJob = jobs.stream()
-                .anyMatch(job -> job.getStatus() == JobStatus.FAILED);
-        if (hasFailedJob) {
-            return JobBatchStatus.REQUIRES_ATTENTION;
-        }
-
-        boolean allJobsDone = jobs.stream()
-                .allMatch(job -> job.getStatus() == JobStatus.DONE);
-        return allJobsDone ? JobBatchStatus.DONE : JobBatchStatus.ABORTED;
-    }
-
-    private static boolean isActive(JobStatus status) {
-        return status == JobStatus.READY
-                || status == JobStatus.SCHEDULED
-                || status == JobStatus.RUNNING;
     }
 
     private static List<Job> copyAndValidateJobs(UUID batchId, List<Job> jobs) {
@@ -93,14 +62,5 @@ public final class JobBatch {
         }
 
         return List.copyOf(jobs);
-    }
-
-    private static String requireNonBlank(String value, String fieldName) {
-        Objects.requireNonNull(value, fieldName + " must not be null");
-        String trimmedValue = value.trim();
-        if (trimmedValue.isEmpty()) {
-            throw new IllegalArgumentException(fieldName + " must not be blank");
-        }
-        return trimmedValue;
     }
 }

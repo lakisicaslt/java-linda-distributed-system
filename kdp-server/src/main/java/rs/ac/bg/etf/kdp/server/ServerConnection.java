@@ -11,7 +11,7 @@ import java.net.Socket;
 import java.net.SocketAddress;
 import java.util.Objects;
 
-public final class ServerConnection {
+public final class ServerConnection implements AutoCloseable {
 
     private final Socket socket;
     private final ConnectionRole role;
@@ -48,5 +48,10 @@ public final class ServerConnection {
 
     public boolean isOpen() {
         return !socket.isClosed();
+    }
+
+    @Override
+    public void close() throws IOException {
+        socket.close();
     }
 }

@@ -13,7 +13,6 @@ public final class JobSpecification {
     public static final int MAX_INPUT_FILES = 6;
     public static final int MAX_OUTPUT_FILES = 6;
 
-    private final String name;
     private final String jarFileName;
     private final List<String> jvmArguments;
     private final List<String> programArguments;
@@ -21,13 +20,11 @@ public final class JobSpecification {
     private final List<String> outputFileNames;
 
     public JobSpecification(
-            String name,
             String jarFileName,
             List<String> jvmArguments,
             List<String> programArguments,
             List<String> inputFileNames,
             List<String> outputFileNames) {
-        this.name = requireNonBlank(name, "job name");
         this.jarFileName = validateJarFileName(jarFileName);
         this.jvmArguments = copyArguments(jvmArguments, "JVM arguments");
         this.programArguments = copyArguments(programArguments, "program arguments");
@@ -35,10 +32,6 @@ public final class JobSpecification {
                 inputFileNames, MAX_INPUT_FILES, "input files");
         this.outputFileNames = copyAndValidateFileNames(
                 outputFileNames, MAX_OUTPUT_FILES, "output files");
-    }
-
-    public String getName() {
-        return name;
     }
 
     public String getJarFileName() {

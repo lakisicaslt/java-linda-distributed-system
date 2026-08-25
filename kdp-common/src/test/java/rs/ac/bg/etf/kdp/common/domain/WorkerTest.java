@@ -61,23 +61,19 @@ class WorkerTest {
     }
 
     @Test
-    void suspectedAndOfflineWorkersCannotReceiveTasks() {
-        Worker suspectedWorker = newWorker(1);
-        suspectedWorker.markSuspected(REGISTERED_AT.plusSeconds(5));
-        assertEquals(WorkerStatus.SUSPECTED, suspectedWorker.getStatus());
-        assertFalse(suspectedWorker.hasCapacity());
+    void offlineWorkerCannotReceiveTasks() {
+        Worker worker = newWorker(1);
+        worker.markOffline(REGISTERED_AT.plusSeconds(5));
 
-        suspectedWorker.markOffline(REGISTERED_AT.plusSeconds(10));
-        assertEquals(WorkerStatus.OFFLINE, suspectedWorker.getStatus());
-        assertEquals(0, suspectedWorker.getAvailableSlots());
+        assertEquals(WorkerStatus.OFFLINE, worker.getStatus());
+        assertEquals(0, worker.getAvailableSlots());
         assertThrows(IllegalStateException.class,
-                () -> suspectedWorker.reserveTask(UUID.randomUUID()));
+                () -> worker.reserveTask(UUID.randomUUID()));
     }
 
     @Test
-    void heartbeatBringsSuspectedWorkerBackOnline() {
+    void heartbeatUpdatesLastSeenTime() {
         Worker worker = newWorker(1);
-        worker.markSuspected(REGISTERED_AT.plusSeconds(5));
 
         worker.recordHeartbeat(REGISTERED_AT.plusSeconds(6));
 
@@ -107,7 +103,7 @@ class WorkerTest {
         Worker worker = newWorker(1);
         worker.recordHeartbeat(REGISTERED_AT.plusSeconds(10));
         assertThrows(IllegalArgumentException.class,
-                () -> worker.markSuspected(REGISTERED_AT.plusSeconds(5)));
+                () -> worker.markOffline(REGISTERED_AT.plusSeconds(5)));
         assertEquals(WorkerStatus.ONLINE, worker.getStatus());
     }
 

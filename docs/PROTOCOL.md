@@ -61,7 +61,8 @@ istoj konekciji i istovremene konekcije sa istim worker ID-jem nisu dozvoljene.
 
 Posle registracije worker periodično šalje `HEARTBEAT` čiji payload sadrži njegov
 UUID od 16 bajtova. ID mora odgovarati ID-ju registrovanom za tu konekciju. Server
-ne šalje odgovor na svaki heartbeat, čime se izbegava nepotreban mrežni saobraćaj.
+ne šalje odgovor na svaki heartbeat. Server na svake dve sekunde proverava vreme
+poslednjeg javljanja i prekida vezu ako se worker nije javio šest sekundi.
 
 ## Dodela zadatka
 
@@ -80,8 +81,9 @@ Potvrda ne znači da je korisnički program već pokrenut; za taj događaj posto
 posebna poruka `TASK_STARTED`.
 
 Scheduler ne dodeljuje više zadataka od kapaciteta koji je worker prijavio. Ako se
-worker diskonektuje dok je zadatak još u statusu `SCHEDULED`, rezervacija se uklanja
-i zadatak se vraća u status `READY` kako bi mogao da bude dodeljen drugom workeru.
+worker diskonektuje dok mu je zadatak dodeljen ili se izvršava, rezervacija se
+uklanja, a zadatak prelazi u status `FAILED`. Zadatak se ne vraća automatski u red:
+korisnik bira da li se prekinuti deo ponavlja ili se odustaje od celog posla.
 
 ## Prenos datoteka
 

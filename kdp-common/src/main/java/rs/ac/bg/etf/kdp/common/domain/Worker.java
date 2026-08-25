@@ -77,19 +77,6 @@ public final class Worker {
     public void recordHeartbeat(Instant occurredAt) {
         Instant validatedTime = validateTime(occurredAt);
         lastHeartbeatAt = validatedTime;
-        if (status != WorkerStatus.ONLINE) {
-            status = WorkerStatus.ONLINE;
-            lastStatusChangedAt = validatedTime;
-        }
-    }
-
-    public void markSuspected(Instant occurredAt) {
-        if (status != WorkerStatus.ONLINE) {
-            throw new IllegalStateException("only an online worker can become suspected");
-        }
-        Instant validatedTime = validateTime(occurredAt);
-        status = WorkerStatus.SUSPECTED;
-        lastStatusChangedAt = validatedTime;
     }
 
     public void markOffline(Instant occurredAt) {

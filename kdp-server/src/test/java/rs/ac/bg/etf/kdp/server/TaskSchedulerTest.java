@@ -15,6 +15,8 @@ import rs.ac.bg.etf.kdp.common.protocol.WorkerRegistrationMessage;
 
 import java.io.ByteArrayInputStream;
 import java.io.ByteArrayOutputStream;
+import java.io.IOException;
+import java.io.OutputStream;
 import java.net.Socket;
 import java.time.Clock;
 import java.time.Instant;
@@ -100,7 +102,7 @@ class TaskSchedulerTest {
     }
 
     @Test
-    void returnsScheduledTaskToQueueWhenWorkerDisconnects() throws Exception {
+    void failedWorkerRequiresExplicitRetryDecision() throws Exception {
         WorkerRegistry registry = new WorkerRegistry(clock);
         TaskScheduler scheduler = new TaskScheduler(registry, clock);
         ConnectionOutput target = registeredWorker(registry, 1);
@@ -110,9 +112,33 @@ class TaskSchedulerTest {
         scheduler.workerDisconnected(target.connection);
         registry.disconnect(target.connection);
 
+        assertEquals(TaskStatus.FAILED, task.getStatus());
+        assertEquals("Worker disconnected", task.getFailureReason());
+        assertEquals(0, scheduler.getReadyTaskCount());
+        assertEquals(0, scheduler.getPendingAcceptanceCount());
+
+        scheduler.retryTask(task.getId());
+
         assertEquals(TaskStatus.READY, task.getStatus());
         assertFalse(task.getAssignedWorkerId().isPresent());
         assertEquals(1, scheduler.getReadyTaskCount());
+    }
+
+    @Test
+    void failedAssignmentIsNotAutomaticallyQueuedAgain() {
+        WorkerRegistry registry = new WorkerRegistry(clock);
+        TaskScheduler scheduler = new TaskScheduler(registry, clock);
+        ServerConnection connection = new ServerConnection(
+                new Socket(), ConnectionRole.WORKER, frameCodec, failingOutput());
+        registry.register(connection, new WorkerRegistrationMessage(
+                UUID.randomUUID(), "worker-host", "Windows", "21", 1));
+        Task task = newTask();
+
+        assertThrows(IOException.class, () -> scheduler.submit(task));
+
+        assertEquals(TaskStatus.FAILED, task.getStatus());
+        assertEquals("Could not send task to worker", task.getFailureReason());
+        assertEquals(0, scheduler.getReadyTaskCount());
         assertEquals(0, scheduler.getPendingAcceptanceCount());
     }
 
@@ -144,6 +170,15 @@ class TaskSchedulerTest {
 
     private static Task newTask() {
         return Task.root(UUID.randomUUID(), UUID.randomUUID(), "Main task", NOW);
+    }
+
+    private static OutputStream failingOutput() {
+        return new OutputStream() {
+            @Override
+            public void write(int value) throws IOException {
+                throw new IOException("connection lost");
+            }
+        };
     }
 
     private static void assertProtocolError(

@@ -214,7 +214,6 @@ class JobTest {
 
     private static JobSpecification validSpecification() {
         return new JobSpecification(
-                "Test job",
                 "test-job.jar",
                 List.of(),
                 List.of(),

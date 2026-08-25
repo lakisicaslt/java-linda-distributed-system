@@ -33,13 +33,16 @@ mvn clean test
 
 Centralni server prihvata Java NET konekcije i proverava verziju protokola i ulogu
 udaljenog programa. Headless radna stanica može da se poveže, registruje svoje
-osnovne podatke i kapacitet, a zatim periodično šalje heartbeat. Server je vodi kao
-`ONLINE` dok je konekcija aktivna i kao `OFFLINE` nakon prekida veze.
+osnovne podatke i kapacitet, a zatim periodično šalje heartbeat. Server periodično
+proverava vreme poslednjeg heartbeat-a i prekida vezu sa radnom stanicom koja je
+prestala da se javlja.
 
 Osnovni scheduler prihvata spremne zadatke, bira online radnu stanicu sa slobodnim
 kapacitetom i šalje joj `ASSIGN_TASK`. Worker pamti zadatak i odgovara porukom
-`TASK_ACCEPTED` sa istim request ID-jem. Ako konekcija nestane pre pokretanja,
-zadatak se automatski vraća u red.
+`TASK_ACCEPTED` sa istim request ID-jem. Ako se radna stanica isključi tokom
+izvršavanja, njen zadatak prelazi u `FAILED` i ne ponavlja se automatski. Odluka o
+ponavljanju prekinutog dela ili odustajanju od celog posla pripada korisniku, kao
+što zahteva tekst projekta.
 
 JAR i ulazne datoteke šalju se od servera ka workeru u delovima od najviše 64 KiB.
 Worker ih upisuje direktno na disk u direktorijum zadatka i potvrđuje završen prenos.

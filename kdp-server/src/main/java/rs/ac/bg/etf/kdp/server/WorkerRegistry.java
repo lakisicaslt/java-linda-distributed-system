@@ -136,6 +136,19 @@ public final class WorkerRegistry {
                 .findFirst();
     }
 
+    public synchronized List<ServerConnection> findUnresponsiveConnections(Instant cutoff) {
+        Objects.requireNonNull(cutoff, "heartbeat cutoff must not be null");
+        return sessions.entrySet().stream()
+                .filter(entry -> {
+                    Worker worker = workers.get(entry.getValue());
+                    return worker != null
+                            && worker.getStatus() == WorkerStatus.ONLINE
+                            && !worker.getLastHeartbeatAt().isAfter(cutoff);
+                })
+                .map(Map.Entry::getKey)
+                .toList();
+    }
+
     public synchronized Optional<Worker> find(UUID workerId) {
         Objects.requireNonNull(workerId, "worker id must not be null");
         return Optional.ofNullable(workers.get(workerId));
