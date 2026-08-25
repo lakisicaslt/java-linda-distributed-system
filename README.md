@@ -53,8 +53,9 @@ ne ostaju ni u memoriji ni kao neupotrebljivi privremeni resursi.
 
 Modul `kdp-runner` može da pokrene primljeni JAR kao zaseban Java proces. Pre
 pokretanja proverava JAR, Linda biblioteku i sve deklarisane ulazne datoteke, zatim
-prosleđuje JVM i programske argumente. Putanja do Linda biblioteke dodaje se kao
-poslednji programski argument. `stdout` i `stderr` čuvaju se odvojeno u direktorijumu
+prosleđuje JVM i programske argumente. Poslati JAR i Linda biblioteka nalaze se na
+classpath-u novog procesa, a putanja do Linda biblioteke dodaje se i kao poslednji
+programski argument. `stdout` i `stderr` čuvaju se odvojeno u direktorijumu
 `.kdp`, a izlazni kod procesa određuje da li je izvršavanje bilo uspešno. Uspešan
 proces mora da napravi sve izlazne datoteke koje je korisnik naveo.
 
@@ -96,6 +97,25 @@ Centralni server vodi evidenciju životnog ciklusa poslova u fajlu
 `server-data/server.log`. Za svaku promenu statusa upisuju se vreme prijema, Job ID,
 hostname dodeljene radne stanice, vreme završetka i trenutni status posla. Svaki novi
 start servera nastavlja da dopisuje u postojeći log.
+
+## Linda prostor torki
+
+Posao dobija Linda objekat pozivom `LindaFactory.getLinda()` iz paketa
+`rs.ac.bg.etf.kdp`. Implementirani su `out`, `in`, `inp`, `rd` i `rdp` iz interfejsa
+zadatog tekstom projekta. Torka je niz stringova; `out` ne prihvata `null` polja,
+dok `null` u šablonu predstavlja bilo koju vrednost. Poklapanje zahteva isti broj
+polja. Uspešna operacija popunjava `null` polja prosleđenog šablona.
+
+`in` i `rd` čekaju dok se ne pojavi odgovarajuća torka. `in` i `inp` je uklanjaju,
+dok je `rd` i `rdp` samo čitaju. Sve operacije su bezbedne kada ih istovremeno
+poziva više procesa i niti. Poslovi poslati zajedno jednim `SUBMIT_BATCH` zahtevom
+dele isti prostor torki, a dve različite grupe imaju odvojene prostore.
+
+Korisnički proces komunicira direktno sa centralnim serverom standardnim Java NET
+socketima. Worker mu pri pokretanju interno prosleđuje adresu servera, Batch ID i
+Task ID; korisnički kod ne mora da poznaje te podatke. Metoda `eval` pripada sledećem
+koraku jer zahteva pravljenje i raspoređivanje novog zadatka, a nije operacija nad
+samim prostorom torki.
 
 Ručna provera iz IntelliJ IDEA:
 

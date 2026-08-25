@@ -16,6 +16,7 @@ class TaskExecutionProtocolCodecTest {
 
     @Test
     void roundTripsExecutionRequest() throws Exception {
+        UUID batchId = UUID.randomUUID();
         UUID taskId = UUID.randomUUID();
         JobSpecification specification = new JobSpecification(
                 "calculation.jar",
@@ -25,8 +26,9 @@ class TaskExecutionProtocolCodecTest {
                 List.of("result.txt"));
 
         TaskExecutionMessage decoded = codec.decode(codec.encode(
-                new TaskExecutionMessage(taskId, specification)));
+                new TaskExecutionMessage(batchId, taskId, specification)));
 
+        assertEquals(batchId, decoded.getBatchId());
         assertEquals(taskId, decoded.getTaskId());
         assertEquals("calculation.jar", decoded.getSpecification().getJarFileName());
         assertEquals(List.of("-Xmx512m"), decoded.getSpecification().getJvmArguments());
@@ -48,6 +50,7 @@ class TaskExecutionProtocolCodecTest {
         JobSpecification specification = new JobSpecification(
                 "job.jar", List.of(), arguments, List.of(), List.of());
         assertThrows(IllegalArgumentException.class, () -> codec.encode(
-                new TaskExecutionMessage(UUID.randomUUID(), specification)));
+                new TaskExecutionMessage(
+                        UUID.randomUUID(), UUID.randomUUID(), specification)));
     }
 }

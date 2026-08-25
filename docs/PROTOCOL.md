@@ -181,9 +181,32 @@ uklanja, a zadatak prelazi u status `FAILED`. Zadatak se ne vraća automatski u 
 korisnik bira da li se prekinuti deo ponavlja ili se odustaje od celog posla.
 
 Nakon što worker potvrdi dodelu i prijem svih datoteka, server šalje `EXECUTE_TASK`.
-Payload sadrži Task ID, ime JAR-a, JVM argumente, programske argumente i liste
+Payload sadrži Batch ID, Task ID, ime JAR-a, JVM argumente, programske argumente i liste
 ulaznih i izlaznih datoteka. Server ne šalje ovu poruku dok postoji prenos datoteke
 za taj zadatak koji worker još nije potvrdio.
+
+## Linda prostor torki
+
+Svaki poziv Linda operacije koristi posebnu LINDA konekciju. Posle standardnog
+handshake-a klijent šalje jednu od poruka `LINDA_OUT`, `LINDA_IN`, `LINDA_INP`,
+`LINDA_RD` ili `LINDA_RDP`. Payload zahteva redom sadrži:
+
+| Polje | Zapis |
+|---|---|
+| Batch ID | UUID, 16 B |
+| Task ID | UUID, 16 B |
+| Broj polja | nenegativan `int` |
+| Polje torke | `boolean`; ako postoji, dužina `int` i UTF-8 tekst |
+
+`null` polje je dozvoljeno u šablonima za čitanje i uklanjanje, ali ne i u torki
+poruke `LINDA_OUT`. Server proverava da navedeni zadatak zaista pripada navedenoj
+grupi. Sve grupe imaju odvojene prostore torki.
+
+Server odgovara porukom `LINDA_RESULT` sa istim request ID-jem. Prvo polje odgovora
+je `boolean matched`. Za uspešnu operaciju iza njega se nalazi pronađena torka u
+istom formatu. Kod neuspešnog `inp` ili `rdp` torka se ne šalje. `in` i `rd` ne
+odgovaraju dok se ne pojavi odgovarajuća torka, ali njihovo čekanje ne blokira
+obradu drugih serverskih konekcija.
 
 ## Status izvršavanja zadatka
 

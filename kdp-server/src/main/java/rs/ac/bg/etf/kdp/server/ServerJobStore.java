@@ -147,6 +147,18 @@ public final class ServerJobStore {
         return Optional.ofNullable(jobs.get(jobId));
     }
 
+    public synchronized Optional<Job> findJobForTask(UUID batchId, UUID taskId) {
+        Objects.requireNonNull(batchId, "batch id must not be null");
+        Objects.requireNonNull(taskId, "task id must not be null");
+        JobBatch batch = batches.get(batchId);
+        if (batch == null) {
+            return Optional.empty();
+        }
+        return batch.getJobs().stream()
+                .filter(job -> job.findTask(taskId).isPresent())
+                .findFirst();
+    }
+
     public synchronized boolean isComplete(UUID jobId) {
         Job job = requireJob(jobId);
         Set<FileKey> files = receivedFiles.get(jobId);

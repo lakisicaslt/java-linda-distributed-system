@@ -35,6 +35,7 @@ public final class ServerMain {
                 Path.of("server-data", "jobs"), Clock.systemUTC(), jobLogger);
         ClientSessionHandler clientHandler = new ClientSessionHandler(
                 jobStore, taskScheduler, resultStore);
+        LindaSessionHandler lindaHandler = new LindaSessionHandler(jobStore);
         ServerMessageHandler notImplemented = (connection, frame) -> {
             String message = "Message is not implemented yet: " + frame.getType();
             connection.send(frame.reply(MessageType.ERROR, message.getBytes(StandardCharsets.UTF_8)));
@@ -42,7 +43,8 @@ public final class ServerMain {
         ServerMessageRouter router = new ServerMessageRouter(
                 Map.of(
                         ConnectionRole.CLIENT, clientHandler,
-                        ConnectionRole.WORKER, workerHandler),
+                        ConnectionRole.WORKER, workerHandler,
+                        ConnectionRole.LINDA, lindaHandler),
                 notImplemented);
         CentralServer server = new CentralServer(config, router);
         WorkerLivenessMonitor livenessMonitor = new WorkerLivenessMonitor(
@@ -53,12 +55,14 @@ public final class ServerMain {
         Runtime.getRuntime().addShutdownHook(new Thread(() -> {
             livenessMonitor.close();
             server.close();
+            lindaHandler.close();
             jobLogger.close();
         }, "kdp-server-shutdown"));
         server.start();
         livenessMonitor.start();
         System.out.println("KDP server listening on port " + server.getLocalPort());
         server.awaitTermination();
+        lindaHandler.close();
         jobLogger.close();
     }
 }

@@ -22,6 +22,7 @@ import rs.ac.bg.etf.kdp.common.protocol.WorkerProtocolCodec;
 import rs.ac.bg.etf.kdp.common.protocol.WorkerRegistrationMessage;
 import rs.ac.bg.etf.kdp.runner.JavaTaskResult;
 import rs.ac.bg.etf.kdp.runner.JavaTaskRunner;
+import rs.ac.bg.etf.kdp.runner.LindaConnectionInfo;
 
 import java.io.IOException;
 import java.io.InputStream;
@@ -324,7 +325,12 @@ public final class WorkerClient implements AutoCloseable {
             JavaTaskResult result = taskRunner.run(
                     execution.getSpecification(),
                     fileStore.taskDirectory(taskId),
-                    config.getLindaLibrary());
+                    config.getLindaLibrary(),
+                    new LindaConnectionInfo(
+                            config.getServerHost(),
+                            config.getServerPort(),
+                            execution.getBatchId(),
+                            taskId));
             sendTaskResults(taskId, result);
             if (result.isSuccessful()) {
                 reportTaskFinished(taskId);

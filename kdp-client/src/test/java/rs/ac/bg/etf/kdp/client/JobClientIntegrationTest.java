@@ -3,6 +3,7 @@ package rs.ac.bg.etf.kdp.client;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
+import rs.ac.bg.etf.kdp.Linda;
 import rs.ac.bg.etf.kdp.common.domain.Job;
 import rs.ac.bg.etf.kdp.common.domain.JobSpecification;
 import rs.ac.bg.etf.kdp.common.domain.JobStatus;
@@ -15,6 +16,7 @@ import rs.ac.bg.etf.kdp.common.protocol.ConnectionRole;
 import rs.ac.bg.etf.kdp.common.protocol.MessageType;
 import rs.ac.bg.etf.kdp.server.CentralServer;
 import rs.ac.bg.etf.kdp.server.ClientSessionHandler;
+import rs.ac.bg.etf.kdp.server.LindaSessionHandler;
 import rs.ac.bg.etf.kdp.server.ServerConfig;
 import rs.ac.bg.etf.kdp.server.ServerJobStore;
 import rs.ac.bg.etf.kdp.server.ServerMessageRouter;
@@ -27,6 +29,7 @@ import rs.ac.bg.etf.kdp.worker.WorkerConfig;
 
 import java.io.IOException;
 import java.io.InputStream;
+import java.io.File;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
@@ -39,6 +42,7 @@ import java.util.jar.Attributes;
 import java.util.jar.JarEntry;
 import java.util.jar.JarOutputStream;
 import java.util.jar.Manifest;
+import java.util.stream.Stream;
 
 import static org.junit.jupiter.api.Assertions.assertArrayEquals;
 import static org.junit.jupiter.api.Assertions.assertEquals;
@@ -52,15 +56,91 @@ class JobClientIntegrationTest {
 
     private CentralServer server;
     private WorkerClient workerClient;
+    private LindaSessionHandler lindaHandler;
 
     @AfterEach
     void stopServer() {
         if (workerClient != null) {
             workerClient.close();
         }
+        if (lindaHandler != null) {
+            lindaHandler.close();
+        }
         if (server != null) {
             server.close();
         }
+    }
+
+    @Test
+    void sharesLindaTuplesBetweenJobsInTheSameBatch() throws Exception {
+        WorkerRegistry registry = new WorkerRegistry();
+        TaskScheduler scheduler = new TaskScheduler(registry);
+        ServerJobStore jobStore = new ServerJobStore(
+                temporaryDirectory.resolve("linda-jobs"));
+        ServerTaskResultStore resultStore = new ServerTaskResultStore(
+                temporaryDirectory.resolve("linda-results"));
+        lindaHandler = new LindaSessionHandler(jobStore);
+        server = new CentralServer(
+                new ServerConfig("127.0.0.1", 0, 10, 8, 1_000),
+                new ServerMessageRouter(
+                        Map.of(
+                                ConnectionRole.CLIENT,
+                                new ClientSessionHandler(jobStore, scheduler, resultStore),
+                                ConnectionRole.WORKER,
+                                new WorkerSessionHandler(registry, scheduler, resultStore),
+                                ConnectionRole.LINDA,
+                                lindaHandler),
+                        (connection, frame) -> connection.send(frame.reply(
+                                MessageType.ERROR, new byte[0]))));
+        server.start();
+
+        Path lindaLibrary = temporaryDirectory.resolve("kdp-linda.jar");
+        createLindaLibrary(lindaLibrary);
+        workerClient = new WorkerClient(new WorkerConfig(
+                "127.0.0.1",
+                server.getLocalPort(),
+                UUID.randomUUID(),
+                2,
+                1_000,
+                1_000,
+                100,
+                temporaryDirectory.resolve("linda-worker"),
+                lindaLibrary));
+        workerClient.start();
+
+        Path jobArchive = temporaryDirectory.resolve("linda-job.jar");
+        createJobArchive(jobArchive, LindaExecutionTestProgram.class);
+        JobSpecification consumer = new JobSpecification(
+                "linda-job.jar",
+                List.of(),
+                List.of("consumer", "consumer.txt"),
+                List.of(),
+                List.of("consumer.txt"));
+        JobSpecification producer = new JobSpecification(
+                "linda-job.jar",
+                List.of(),
+                List.of("producer", "producer.txt"),
+                List.of(),
+                List.of("producer.txt"));
+        JobClient client = new JobClient(new ClientConfig(
+                "127.0.0.1", server.getLocalPort(), 1_000, 1_000));
+
+        BatchAcceptedMessage accepted = client.submit(List.of(
+                new JobSubmission(consumer, jobArchive, List.of()),
+                new JobSubmission(producer, jobArchive, List.of())));
+        Job consumerJob = jobStore.findJob(accepted.getJobIds().get(0)).orElseThrow();
+        Job producerJob = jobStore.findJob(accepted.getJobIds().get(1)).orElseThrow();
+
+        assertTrue(await(() -> consumerJob.getStatus() == JobStatus.DONE
+                && producerJob.getStatus() == JobStatus.DONE));
+        assertEquals("distributed tuple", Files.readString(resultStore
+                .taskDirectory(consumerJob.getRootTask().getId())
+                .resolve("outputs")
+                .resolve("consumer.txt"), StandardCharsets.UTF_8));
+        assertEquals("sent", Files.readString(resultStore
+                .taskDirectory(producerJob.getRootTask().getId())
+                .resolve("outputs")
+                .resolve("producer.txt"), StandardCharsets.UTF_8));
     }
 
     @Test
@@ -328,14 +408,18 @@ class JobClientIntegrationTest {
     }
 
     private static void createJobArchive(Path target) throws IOException {
+        createJobArchive(target, ClientExecutionTestProgram.class);
+    }
+
+    private static void createJobArchive(Path target, Class<?> mainClass) throws IOException {
         Manifest manifest = new Manifest();
         manifest.getMainAttributes().put(Attributes.Name.MANIFEST_VERSION, "1.0");
         manifest.getMainAttributes().put(
-                Attributes.Name.MAIN_CLASS, ClientExecutionTestProgram.class.getName());
+                Attributes.Name.MAIN_CLASS, mainClass.getName());
 
-        String classEntryName = ClientExecutionTestProgram.class.getName()
+        String classEntryName = mainClass.getName()
                 .replace('.', '/') + ".class";
-        try (InputStream classBytes = ClientExecutionTestProgram.class.getClassLoader()
+        try (InputStream classBytes = mainClass.getClassLoader()
                 .getResourceAsStream(classEntryName);
              JarOutputStream archive = new JarOutputStream(
                      Files.newOutputStream(target), manifest)) {
@@ -345,6 +429,26 @@ class JobClientIntegrationTest {
             archive.putNextEntry(new JarEntry(classEntryName));
             classBytes.transferTo(archive);
             archive.closeEntry();
+        }
+    }
+
+    private static void createLindaLibrary(Path target) throws Exception {
+        Path classesDirectory = Path.of(Linda.class.getProtectionDomain()
+                .getCodeSource()
+                .getLocation()
+                .toURI());
+        try (JarOutputStream archive = new JarOutputStream(Files.newOutputStream(target));
+             Stream<Path> files = Files.walk(classesDirectory)) {
+            for (Path file : files.filter(Files::isRegularFile)
+                    .filter(path -> path.getFileName().toString().endsWith(".class"))
+                    .toList()) {
+                String entryName = classesDirectory.relativize(file)
+                        .toString()
+                        .replace(File.separatorChar, '/');
+                archive.putNextEntry(new JarEntry(entryName));
+                Files.copy(file, archive);
+                archive.closeEntry();
+            }
         }
     }
 }

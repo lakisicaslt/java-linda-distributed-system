@@ -1,13 +1,17 @@
 package rs.ac.bg.etf.kdp.runner;
 
+import rs.ac.bg.etf.kdp.LindaFactory;
 import rs.ac.bg.etf.kdp.common.domain.JobSpecification;
 
+import java.io.File;
 import java.io.IOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Objects;
+import java.util.jar.Attributes;
+import java.util.jar.JarFile;
 
 /** Starts a submitted Java archive in a separate JVM process. */
 public final class JavaTaskRunner {
@@ -31,6 +35,14 @@ public final class JavaTaskRunner {
             JobSpecification specification,
             Path taskDirectory,
             Path lindaLibrary) throws IOException, InterruptedException {
+        return run(specification, taskDirectory, lindaLibrary, null);
+    }
+
+    public JavaTaskResult run(
+            JobSpecification specification,
+            Path taskDirectory,
+            Path lindaLibrary,
+            LindaConnectionInfo lindaConnection) throws IOException, InterruptedException {
         Objects.requireNonNull(specification, "job specification must not be null");
         Path workingDirectory = requireDirectory(taskDirectory, "task directory");
         Path jobArchive = requireRegularFile(
@@ -46,7 +58,7 @@ public final class JavaTaskRunner {
         Path standardError = captureDirectory.resolve(STANDARD_ERROR_FILE);
 
         ProcessBuilder processBuilder = new ProcessBuilder(buildCommand(
-                specification, jobArchive, lindaArchive));
+                specification, jobArchive, lindaArchive, lindaConnection));
         processBuilder.directory(workingDirectory.toFile());
         processBuilder.redirectOutput(standardOutput.toFile());
         processBuilder.redirectError(standardError.toFile());
@@ -79,15 +91,50 @@ public final class JavaTaskRunner {
     private List<String> buildCommand(
             JobSpecification specification,
             Path jobArchive,
-            Path lindaArchive) {
+            Path lindaArchive,
+            LindaConnectionInfo lindaConnection) throws IOException {
         List<String> command = new ArrayList<>();
         command.add(javaExecutable.toString());
         command.addAll(specification.getJvmArguments());
-        command.add("-jar");
-        command.add(jobArchive.toString());
+        if (lindaConnection != null) {
+            command.add(systemProperty(
+                    LindaFactory.SERVER_HOST_PROPERTY, lindaConnection.getServerHost()));
+            command.add(systemProperty(
+                    LindaFactory.SERVER_PORT_PROPERTY,
+                    Integer.toString(lindaConnection.getServerPort())));
+            command.add(systemProperty(
+                    LindaFactory.BATCH_ID_PROPERTY,
+                    lindaConnection.getBatchId().toString()));
+            command.add(systemProperty(
+                    LindaFactory.TASK_ID_PROPERTY,
+                    lindaConnection.getTaskId().toString()));
+        }
+        command.add("-cp");
+        command.add(jobArchive + File.pathSeparator + lindaArchive);
+        command.add(mainClass(jobArchive));
         command.addAll(specification.getProgramArguments());
         command.add(lindaArchive.toString());
         return command;
+    }
+
+    private static String mainClass(Path jobArchive) throws IOException {
+        try (JarFile archive = new JarFile(jobArchive.toFile())) {
+            if (archive.getManifest() == null) {
+                throw new IllegalArgumentException("Job archive does not have a manifest");
+            }
+            String mainClass = archive.getManifest()
+                    .getMainAttributes()
+                    .getValue(Attributes.Name.MAIN_CLASS);
+            if (mainClass == null || mainClass.isBlank()) {
+                throw new IllegalArgumentException(
+                        "Job archive manifest does not declare Main-Class");
+            }
+            return mainClass.trim();
+        }
+    }
+
+    private static String systemProperty(String name, String value) {
+        return "-D" + name + "=" + value;
     }
 
     private static void validateInputFiles(

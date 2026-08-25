@@ -23,6 +23,7 @@ public final class TaskExecutionProtocolCodec {
         try {
             ByteArrayOutputStream bytes = new ByteArrayOutputStream();
             DataOutputStream output = new DataOutputStream(bytes);
+            writeUuid(output, message.getBatchId());
             writeUuid(output, message.getTaskId());
             specificationCodec.write(output, specification);
             output.flush();
@@ -37,12 +38,13 @@ public final class TaskExecutionProtocolCodec {
         try {
             ByteArrayInputStream bytes = new ByteArrayInputStream(payload);
             DataInputStream input = new DataInputStream(bytes);
+            UUID batchId = readUuid(input);
             UUID taskId = readUuid(input);
             JobSpecification specification = specificationCodec.read(input);
             if (bytes.available() != 0) {
                 throw new IllegalArgumentException("Task execution payload has trailing data");
             }
-            return new TaskExecutionMessage(taskId, specification);
+            return new TaskExecutionMessage(batchId, taskId, specification);
         } catch (EOFException exception) {
             throw invalidPayload("Task execution payload is truncated", exception);
         } catch (IOException | IllegalArgumentException exception) {

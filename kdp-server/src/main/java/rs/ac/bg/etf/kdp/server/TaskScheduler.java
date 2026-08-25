@@ -304,11 +304,14 @@ public final class TaskScheduler {
         }
 
         UUID workerId = task.getAssignedWorkerId().orElseThrow();
+        Job job = jobsByTaskId.get(taskId);
+        UUID batchId = job == null ? task.getJobId() : job.getBatchId();
         ServerConnection connection = workerRegistry.findConnection(workerId)
                 .orElseThrow(() -> new IOException("assigned worker is no longer connected"));
         ProtocolFrame request = ProtocolFrame.request(
                 MessageType.EXECUTE_TASK,
-                executionCodec.encode(new TaskExecutionMessage(taskId, specification)));
+                executionCodec.encode(new TaskExecutionMessage(
+                        batchId, taskId, specification)));
         executionRequestedTaskIds.add(taskId);
         executionSpecifications.put(taskId, specification);
         try {
