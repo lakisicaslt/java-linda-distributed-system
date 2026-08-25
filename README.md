@@ -76,6 +76,12 @@ njegov korenski zadatak, server mu šalje sačuvani JAR i ulaze, čeka potvrdu s
 fajla i tek zatim šalje `EXECUTE_TASK`. Statusi korenskog zadatka istovremeno menjaju
 status posla kroz `READY`, `SCHEDULED`, `RUNNING`, `DONE` ili `FAILED`.
 
+Parametri celog skupa poslova mogu da se zadaju UTF-8 `properties` datotekom.
+`JobConfigurationParser` proverava sva polja i lokalne datoteke, a `ClientMain`
+učitava konfiguraciju i predaje skup serveru. Relativne putanje računaju se prema
+direktorijumu konfiguracije. Tačan format i primer nalaze se u
+[`docs/CLIENT_CONFIGURATION.md`](docs/CLIENT_CONFIGURATION.md).
+
 Posle predaje klijent ne mora da ostane povezan. `JobClient` može kasnije da otvori
 novu CLIENT sesiju i pomoću sačuvanog Batch ID-ja zatraži trenutni status svih
 poslova iz te grupe. Odgovor sadrži Job ID, status i razlog greške za `FAILED`

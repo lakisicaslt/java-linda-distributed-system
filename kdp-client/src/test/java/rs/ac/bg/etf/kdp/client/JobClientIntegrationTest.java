@@ -389,22 +389,33 @@ class JobClientIntegrationTest {
         Files.write(archive, archiveContent);
         Files.writeString(input, "42");
 
-        JobSpecification specification = new JobSpecification(
-                "calculation.jar",
-                List.of("-Xmx512m"),
-                List.of("fast"),
-                List.of("input.txt"),
-                List.of("result.txt"));
+        Path configuration = Files.writeString(
+                temporaryDirectory.resolve("jobs.properties"),
+                """
+                jobs=1
+                job.1.jar=calculation.jar
+                job.1.jvmArgument.count=1
+                job.1.jvmArgument.1=-Xmx512m
+                job.1.argument.count=1
+                job.1.argument.1=fast
+                job.1.input.count=1
+                job.1.input.1=input.txt
+                job.1.output.count=1
+                job.1.output.1=result.txt
+                """,
+                StandardCharsets.UTF_8);
         JobClient client = new JobClient(new ClientConfig(
                 "127.0.0.1", server.getLocalPort(), 1_000, 1_000));
 
-        BatchAcceptedMessage accepted = client.submit(List.of(
-                new JobSubmission(specification, archive, List.of(input))));
+        BatchAcceptedMessage accepted = client.submit(
+                new JobConfigurationParser().parse(configuration));
 
         assertEquals(1, accepted.getJobIds().size());
         Job storedJob = store.findJob(accepted.getJobIds().get(0)).orElseThrow();
         assertEquals(accepted.getBatchId(), storedJob.getBatchId());
         assertEquals("calculation.jar", storedJob.getSpecification().getJarFileName());
+        assertEquals(List.of("-Xmx512m"), storedJob.getSpecification().getJvmArguments());
+        assertEquals(List.of("fast"), storedJob.getSpecification().getProgramArguments());
         assertTrue(store.isComplete(storedJob.getId()));
         assertArrayEquals(archiveContent, Files.readAllBytes(store.archivePath(storedJob.getId())));
         assertEquals("42", Files.readString(store.inputPath(storedJob.getId(), "input.txt")));
