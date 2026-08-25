@@ -29,6 +29,20 @@ Cilj je izrada distribuiranog sistema koji prima Java poslove, raspoređuje ih n
 mvn clean test
 ```
 
+## Laboratorijska distribucija
+
+Paket koji se pokreće bez IntelliJ IDEA pravi se komandom:
+
+```powershell
+powershell -ExecutionPolicy Bypass -File .\scripts\build-distribution.ps1
+```
+
+Rezultat su direktorijum `dist` i prenosiva arhiva
+`target/java-linda-lab.zip`. Paket sadrži start skripte za sva tri programa,
+headless worker, Linda biblioteku, demo JAR-ove i konfiguracije za javne testove.
+Detaljan postupak nalazi se u
+[`docs/LABORATORY_PREPARATION.md`](docs/LABORATORY_PREPARATION.md).
+
 ## Trenutno funkcionalan tok
 
 Centralni server prihvata Java NET konekcije i proverava verziju protokola i ulogu
