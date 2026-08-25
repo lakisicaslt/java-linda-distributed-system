@@ -177,6 +177,10 @@ public final class ServerJobStore {
                 .toList();
     }
 
+    public synchronized List<Job> getJobs() {
+        return List.copyOf(jobs.values());
+    }
+
     public synchronized Optional<Job> claimForScheduling(UUID jobId) {
         Job job = requireJob(jobId);
         if (!isComplete(jobId) || !jobsClaimedForScheduling.add(jobId)) {

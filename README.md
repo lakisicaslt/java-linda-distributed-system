@@ -82,6 +82,19 @@ učitava konfiguraciju i predaje skup serveru. Relativne putanje računaju se pr
 direktorijumu konfiguracije. Tačan format i primer nalaze se u
 [`docs/CLIENT_CONFIGURATION.md`](docs/CLIENT_CONFIGURATION.md).
 
+## Grafičke aplikacije
+
+Implementirana su tri minimalistička Swing interfejsa. `ClientGuiMain` omogućava
+zadavanje jednog ili više poslova kroz vođeni formular ili tekstualnu konfiguraciju,
+automatsko praćenje statusa, odluku nakon otkaza radne stanice i preuzimanje
+rezultata. `ServerGuiMain` pokreće server i prikazuje radne stanice, poslove i log.
+`WorkerGuiMain` povezuje radnu stanicu i prikazuje njeno trenutno zauzeće.
+
+Mrežne operacije se ne izvršavaju na Swing EDT niti, tako da interfejs ostaje
+odzivan dok čeka server ili prenosi datoteke. Konzolni `WorkerMain` ostaje potpuno
+funkcionalan za obavezni headless način rada. Detaljno uputstvo nalazi se u
+[`docs/GUI_USAGE.md`](docs/GUI_USAGE.md).
+
 Posle predaje klijent ne mora da ostane povezan. `JobClient` može kasnije da otvori
 novu CLIENT sesiju i pomoću sačuvanog Batch ID-ja zatraži trenutni status svih
 poslova iz te grupe. Odgovor sadrži Job ID, status i razlog greške za `FAILED`
@@ -149,5 +162,4 @@ WorkerMain [server-host] [server-port] [capacity] [linda-library]
 
 Četvrti argument je putanja do lokalnog `kdp-linda.jar`; podrazumevana vrednost je
 `kdp-linda.jar` u trenutnom direktorijumu. Ovo je potpuno headless pokretanje.
-Swing interfejs će kasnije koristiti isti `WorkerClient`, tako da mrežna logika neće
-biti duplirana.
+Swing interfejs koristi isti `WorkerClient`, tako da mrežna logika nije duplirana.
