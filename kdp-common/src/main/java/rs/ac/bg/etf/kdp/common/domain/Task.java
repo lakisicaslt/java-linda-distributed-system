@@ -91,6 +91,7 @@ public final class Task {
     public void abort(Instant occurredAt) {
         transitionTo(TaskStatus.ABORTED, occurredAt);
         finishedAt = occurredAt;
+        failureReason = null;
     }
 
     public UUID getId() {

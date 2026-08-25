@@ -13,6 +13,9 @@ public final class ClientExecutionTestProgram {
     public static void main(String[] args) throws Exception {
         String outputFileName = args[0];
         String lindaLibrary = args[args.length - 1];
+        if (args.length > 2) {
+            Thread.sleep(Long.parseLong(args[1]));
+        }
         String input = Files.readString(Path.of("input.txt"), StandardCharsets.UTF_8);
 
         Files.writeString(

@@ -14,12 +14,13 @@ import rs.ac.bg.etf.kdp.common.protocol.ConnectionRole;
 import rs.ac.bg.etf.kdp.common.protocol.FileTransferMetadata;
 import rs.ac.bg.etf.kdp.common.protocol.FileTransferProtocolCodec;
 import rs.ac.bg.etf.kdp.common.protocol.FileTransferSender;
+import rs.ac.bg.etf.kdp.common.protocol.JobDecisionProtocolCodec;
+import rs.ac.bg.etf.kdp.common.protocol.JobStatusSnapshot;
 import rs.ac.bg.etf.kdp.common.protocol.MessageType;
 import rs.ac.bg.etf.kdp.common.protocol.ProtocolError;
 import rs.ac.bg.etf.kdp.common.protocol.ProtocolException;
 import rs.ac.bg.etf.kdp.common.protocol.ProtocolFrame;
 import rs.ac.bg.etf.kdp.common.protocol.ReceivedFile;
-import rs.ac.bg.etf.kdp.common.protocol.JobStatusSnapshot;
 
 import java.io.IOException;
 import java.nio.file.Path;
@@ -45,6 +46,7 @@ public final class ClientSessionHandler implements ServerMessageHandler {
     private final BatchResultProtocolCodec resultCodec = new BatchResultProtocolCodec();
     private final FileTransferProtocolCodec fileCodec = new FileTransferProtocolCodec();
     private final FileTransferSender fileSender = new FileTransferSender();
+    private final JobDecisionProtocolCodec decisionCodec = new JobDecisionProtocolCodec();
     private final Map<ServerConnection, Set<UUID>> submittedJobIds =
             new IdentityHashMap<>();
     private final Map<ServerConnection, Set<UUID>> pendingResultTransfers =
@@ -87,6 +89,10 @@ public final class ClientSessionHandler implements ServerMessageHandler {
                 sendBatchStatus(connection, frame);
             } else if (frame.getType() == MessageType.GET_BATCH_RESULT) {
                 sendBatchResult(connection, frame);
+            } else if (frame.getType() == MessageType.ABORT_JOB) {
+                applyJobDecision(connection, frame, false);
+            } else if (frame.getType() == MessageType.RETRY_JOB) {
+                applyJobDecision(connection, frame, true);
             } else if (frame.getType() == MessageType.FILE_ACKNOWLEDGED) {
                 acknowledgeResultFile(connection, frame);
             } else if (frame.getType() == MessageType.FILE_BEGIN
@@ -193,6 +199,25 @@ public final class ClientSessionHandler implements ServerMessageHandler {
         for (ServerTaskResultStore.StoredResultFile storedFile : storedFiles) {
             sendResultFile(connection, storedFile);
         }
+    }
+
+    private void applyJobDecision(
+            ServerConnection connection,
+            ProtocolFrame frame,
+            boolean retry) throws IOException {
+        UUID jobId = decisionCodec.decodeJobReference(frame.getPayload());
+        Job job = jobStore.findJob(jobId).orElseThrow(() ->
+                new ProtocolException(
+                        ProtocolError.INVALID_MESSAGE_PAYLOAD,
+                        "Requested job does not exist"));
+        if (retry) {
+            scheduler.retryFailedJob(job);
+        } else {
+            scheduler.abortFailedJob(job);
+        }
+        connection.send(frame.reply(
+                MessageType.JOB_DECISION_ACCEPTED,
+                decisionCodec.encodeJobReference(jobId)));
     }
 
     private void sendResultFile(

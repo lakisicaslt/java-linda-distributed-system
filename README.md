@@ -86,6 +86,12 @@ a zatim u blokovima strimuje deklarisane izlazne datoteke, `stdout` i `stderr`.
 Klijent proverava svaki prenos prema manifestu i čuva ga u direktorijumu izabranom
 pri pozivu, odvojeno po Job ID-ju u poddirektorijumima `outputs` i `streams`.
 
+Ako se worker isključi tokom izvršavanja, posao dobija status `FAILED` i razlog
+`Worker disconnected`. Klijent tada bira dalji tok pozivom `abortFailedJob` ili
+`retryFailedJob`. Prva odluka postavlja posao na `ABORTED`, dok druga vraća prekinuti
+zadatak u `READY`; scheduler ga ne ponavlja samostalno i novi pokušaj dobija sledeći
+redni broj.
+
 Ručna provera iz IntelliJ IDEA:
 
 1. Pokrenuti `rs.ac.bg.etf.kdp.server.ServerMain` iz modula `kdp-server`.

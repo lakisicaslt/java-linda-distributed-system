@@ -109,6 +109,22 @@ Manifest može sadržati deklarisane `OUTPUT` datoteke i tokove `STANDARD_OUTPUT
 su stvarno primljeni pre neuspeha. Zahtev se odbija dok postoji posao koji još nije
 u konačnom statusu.
 
+## Odluka nakon otkaza radne stanice
+
+Kada prekid veze sa workerom zaustavi zadatak, server postavlja zadatak i pripadajući
+posao na `FAILED`. Razlog `Worker disconnected` klijent dobija kroz redovan
+`GET_BATCH_STATUS` upit. Server ne pokušava automatsko ponovno izvršavanje.
+
+Klijent zatim za Job ID šalje jednu od sledećih poruka:
+
+- `ABORT_JOB` - ceo neuspešan posao prelazi u `ABORTED`;
+- `RETRY_JOB` - prekinuti zadatak prelazi u `READY` i scheduler ga dodeljuje prvoj
+  narednoj radnoj stanici sa slobodnim kapacitetom.
+
+Oba zahteva su dozvoljena samo kada je posao u statusu `FAILED`. Server potvrđuje
+primenjenu odluku porukom `JOB_DECISION_ACCEPTED`, sa istim request ID-jem i Job ID-jem.
+Svako novo dodeljivanje uvećava broj pokušaja zadatka.
+
 ## Registracija radne stanice
 
 WORKER sesija odmah nakon handshake-a šalje `REGISTER_WORKER`. Payload redom sadrži:

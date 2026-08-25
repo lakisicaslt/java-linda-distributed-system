@@ -208,6 +208,26 @@ class JobTest {
         assertEquals(TaskStatus.ABORTED, eval.getStatus());
     }
 
+    @Test
+    void failedJobCanBeAbortedAfterWorkerFailure() {
+        Job job = newJob();
+        Task root = job.getRootTask();
+        root.assignTo(UUID.randomUUID(), CREATED_AT.plusSeconds(1));
+        job.schedule(CREATED_AT.plusSeconds(1));
+        root.markRunning(CREATED_AT.plusSeconds(2));
+        job.markRunning(CREATED_AT.plusSeconds(2));
+        root.markFailed(CREATED_AT.plusSeconds(3), "Worker disconnected");
+        job.markFailed(CREATED_AT.plusSeconds(3), "Worker disconnected");
+
+        job.abort(CREATED_AT.plusSeconds(4));
+
+        assertEquals(JobStatus.ABORTED, job.getStatus());
+        assertEquals(TaskStatus.ABORTED, root.getStatus());
+        assertEquals(CREATED_AT.plusSeconds(4), job.getFinishedAt());
+        assertNull(job.getFailureReason());
+        assertNull(root.getFailureReason());
+    }
+
     private static Job newJob() {
         return new Job(UUID.randomUUID(), UUID.randomUUID(), validSpecification(), CREATED_AT);
     }

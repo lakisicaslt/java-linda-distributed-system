@@ -216,11 +216,40 @@ public final class TaskScheduler {
         Instant occurredAt = clock.instant();
         Job job = jobsByTaskId.get(taskId);
         if (job != null) {
-            job.retry(occurredAt);
+            retryFailedJob(job);
+            return;
         }
         task.retry(occurredAt);
-        preparedTransfersStarted.remove(taskId);
+        clearFailedAttempt(task);
         readyTasks.addLast(task);
+        dispatchAvailableTasks();
+    }
+
+    public synchronized void abortFailedJob(Job job) {
+        Job scheduledJob = requireScheduledJob(job);
+        if (scheduledJob.getStatus() != JobStatus.FAILED) {
+            throw new IllegalStateException("only a failed job can be aborted");
+        }
+        scheduledJob.abort(clock.instant());
+        scheduledJob.getTasks().forEach(this::clearFailedAttempt);
+    }
+
+    public synchronized void retryFailedJob(Job job) throws IOException {
+        Job scheduledJob = requireScheduledJob(job);
+        if (scheduledJob.getStatus() != JobStatus.FAILED) {
+            throw new IllegalStateException("only a failed job can be retried");
+        }
+        List<Task> failedTasks = scheduledJob.getFailedTasks();
+        if (failedTasks.isEmpty()) {
+            throw new IllegalStateException("failed job does not contain a failed task");
+        }
+
+        Instant occurredAt = clock.instant();
+        scheduledJob.retry(occurredAt);
+        for (Task task : failedTasks) {
+            clearFailedAttempt(task);
+            readyTasks.addLast(task);
+        }
         dispatchAvailableTasks();
     }
 
@@ -497,6 +526,25 @@ public final class TaskScheduler {
         preparedTransfersStarted.remove(task.getId());
         pendingFileTransfers.entrySet().removeIf(
                 entry -> entry.getValue().getId().equals(task.getId()));
+    }
+
+    private void clearFailedAttempt(Task task) {
+        removePendingAcceptance(task.getId());
+        acceptedTaskIds.remove(task.getId());
+        executionRequestedTaskIds.remove(task.getId());
+        executionSpecifications.remove(task.getId());
+        preparedTransfersStarted.remove(task.getId());
+        pendingFileTransfers.entrySet().removeIf(
+                entry -> entry.getValue().getId().equals(task.getId()));
+    }
+
+    private Job requireScheduledJob(Job job) {
+        Objects.requireNonNull(job, "job must not be null");
+        Job scheduledJob = jobsByTaskId.get(job.getRootTask().getId());
+        if (scheduledJob != job) {
+            throw new IllegalArgumentException("job is not known to the scheduler");
+        }
+        return scheduledJob;
     }
 
     private void markJobScheduled(Task task, Instant occurredAt) {

@@ -6,6 +6,8 @@ import org.junit.jupiter.api.io.TempDir;
 import rs.ac.bg.etf.kdp.common.domain.Job;
 import rs.ac.bg.etf.kdp.common.domain.JobSpecification;
 import rs.ac.bg.etf.kdp.common.domain.JobStatus;
+import rs.ac.bg.etf.kdp.common.domain.TaskStatus;
+import rs.ac.bg.etf.kdp.common.domain.WorkerStatus;
 import rs.ac.bg.etf.kdp.common.protocol.BatchAcceptedMessage;
 import rs.ac.bg.etf.kdp.common.protocol.BatchResultMessage;
 import rs.ac.bg.etf.kdp.common.protocol.BatchStatusMessage;
@@ -112,6 +114,8 @@ class JobClientIntegrationTest {
                 status.findJob(storedJob.getId()).orElseThrow().getStatus());
         assertThrows(IOException.class, () -> reconnectedClient.downloadBatchResults(
                 accepted.getBatchId(), temporaryDirectory.resolve("premature-results")));
+        assertThrows(IOException.class, () -> reconnectedClient.abortFailedJob(storedJob.getId()));
+        assertThrows(IOException.class, () -> reconnectedClient.retryFailedJob(storedJob.getId()));
     }
 
     @Test
@@ -199,6 +203,107 @@ class JobClientIntegrationTest {
         assertTrue(Files.readString(
                 downloadedJob.resolve("streams").resolve("stderr.txt"))
                 .contains("client end-to-end test"));
+    }
+
+    @Test
+    void appliesClientDecisionAfterWorkerDisconnects() throws Exception {
+        WorkerRegistry registry = new WorkerRegistry();
+        TaskScheduler scheduler = new TaskScheduler(registry);
+        ServerJobStore jobStore = new ServerJobStore(
+                temporaryDirectory.resolve("failure-jobs"));
+        ServerTaskResultStore resultStore = new ServerTaskResultStore(
+                temporaryDirectory.resolve("failure-results"));
+        server = new CentralServer(
+                new ServerConfig("127.0.0.1", 0, 10, 8, 1_000),
+                new ServerMessageRouter(
+                        Map.of(
+                                ConnectionRole.CLIENT,
+                                new ClientSessionHandler(jobStore, scheduler, resultStore),
+                                ConnectionRole.WORKER,
+                                new WorkerSessionHandler(registry, scheduler, resultStore)),
+                        (connection, frame) -> connection.send(frame.reply(
+                                MessageType.ERROR, new byte[0]))));
+        server.start();
+
+        Path lindaLibrary = Files.createFile(
+                temporaryDirectory.resolve("failure-kdp-linda.jar"));
+        UUID firstWorkerId = UUID.randomUUID();
+        workerClient = new WorkerClient(new WorkerConfig(
+                "127.0.0.1",
+                server.getLocalPort(),
+                firstWorkerId,
+                2,
+                1_000,
+                1_000,
+                100,
+                temporaryDirectory.resolve("first-worker"),
+                lindaLibrary));
+        workerClient.start();
+
+        Path archive = temporaryDirectory.resolve("interruptible-job.jar");
+        createJobArchive(archive);
+        Path input = temporaryDirectory.resolve("input.txt");
+        Files.writeString(input, "retry result", StandardCharsets.UTF_8);
+        JobSpecification specification = new JobSpecification(
+                "interruptible-job.jar",
+                List.of(),
+                List.of("result.txt", "2000"),
+                List.of("input.txt"),
+                List.of("result.txt"));
+        JobClient client = new JobClient(new ClientConfig(
+                "127.0.0.1", server.getLocalPort(), 1_000, 1_000));
+
+        BatchAcceptedMessage accepted = client.submit(List.of(
+                new JobSubmission(specification, archive, List.of(input)),
+                new JobSubmission(specification, archive, List.of(input))));
+        Job abortedJob = jobStore.findJob(accepted.getJobIds().get(0)).orElseThrow();
+        Job retriedJob = jobStore.findJob(accepted.getJobIds().get(1)).orElseThrow();
+        assertTrue(await(() -> abortedJob.getStatus() == JobStatus.RUNNING
+                && retriedJob.getStatus() == JobStatus.RUNNING));
+
+        workerClient.close();
+        workerClient = null;
+        assertTrue(await(() -> abortedJob.getStatus() == JobStatus.FAILED
+                && retriedJob.getStatus() == JobStatus.FAILED));
+        assertTrue(await(() -> registry.find(firstWorkerId)
+                .map(worker -> worker.getStatus() == WorkerStatus.OFFLINE)
+                .orElse(false)));
+
+        BatchStatusMessage failedStatus = client.getBatchStatus(accepted.getBatchId());
+        assertEquals("Worker disconnected", failedStatus.findJob(abortedJob.getId())
+                .orElseThrow().getFailureReason().orElseThrow());
+        client.abortFailedJob(abortedJob.getId());
+        client.retryFailedJob(retriedJob.getId());
+
+        assertEquals(JobStatus.ABORTED, abortedJob.getStatus());
+        assertEquals(TaskStatus.ABORTED, abortedJob.getRootTask().getStatus());
+        assertEquals(JobStatus.READY, retriedJob.getStatus());
+        assertEquals(1, scheduler.getReadyTaskCount());
+
+        workerClient = new WorkerClient(new WorkerConfig(
+                "127.0.0.1",
+                server.getLocalPort(),
+                UUID.randomUUID(),
+                1,
+                1_000,
+                1_000,
+                100,
+                temporaryDirectory.resolve("replacement-worker"),
+                lindaLibrary));
+        workerClient.start();
+
+        assertTrue(await(() -> retriedJob.getStatus() == JobStatus.DONE));
+        assertEquals(2, retriedJob.getRootTask().getAttemptNumber());
+        assertEquals("RETRY RESULT", Files.readString(resultStore
+                .taskDirectory(retriedJob.getRootTask().getId())
+                .resolve("outputs")
+                .resolve("result.txt"), StandardCharsets.UTF_8));
+
+        BatchStatusMessage finalStatus = client.getBatchStatus(accepted.getBatchId());
+        assertEquals(JobStatus.ABORTED,
+                finalStatus.findJob(abortedJob.getId()).orElseThrow().getStatus());
+        assertEquals(JobStatus.DONE,
+                finalStatus.findJob(retriedJob.getId()).orElseThrow().getStatus());
     }
 
     @Test

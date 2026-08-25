@@ -13,6 +13,7 @@ import rs.ac.bg.etf.kdp.common.protocol.FileTransferMetadata;
 import rs.ac.bg.etf.kdp.common.protocol.FileTransferProtocolCodec;
 import rs.ac.bg.etf.kdp.common.protocol.FileTransferReceiver;
 import rs.ac.bg.etf.kdp.common.protocol.FileTransferSender;
+import rs.ac.bg.etf.kdp.common.protocol.JobDecisionProtocolCodec;
 import rs.ac.bg.etf.kdp.common.protocol.MessageType;
 import rs.ac.bg.etf.kdp.common.protocol.ProtocolError;
 import rs.ac.bg.etf.kdp.common.protocol.ProtocolException;
@@ -47,6 +48,7 @@ public final class JobClient {
     private final BatchResultProtocolCodec resultCodec = new BatchResultProtocolCodec();
     private final FileTransferSender fileSender = new FileTransferSender();
     private final FileTransferProtocolCodec fileCodec = new FileTransferProtocolCodec();
+    private final JobDecisionProtocolCodec decisionCodec = new JobDecisionProtocolCodec();
 
     public JobClient(ClientConfig config) {
         this.config = Objects.requireNonNull(config, "client config must not be null");
@@ -146,6 +148,41 @@ public final class JobClient {
                 frameCodec.write(output, acknowledgement);
             }
             return result;
+        }
+    }
+
+    public void abortFailedJob(UUID jobId) throws IOException {
+        sendJobDecision(MessageType.ABORT_JOB, jobId);
+    }
+
+    public void retryFailedJob(UUID jobId) throws IOException {
+        sendJobDecision(MessageType.RETRY_JOB, jobId);
+    }
+
+    private void sendJobDecision(MessageType decision, UUID jobId) throws IOException {
+        Objects.requireNonNull(jobId, "job id must not be null");
+        try (Socket socket = ProtocolSockets.connect(
+                config.getServerHost(),
+                config.getServerPort(),
+                config.getConnectTimeoutMillis(),
+                config.getHandshakeTimeoutMillis())) {
+            InputStream input = socket.getInputStream();
+            OutputStream output = socket.getOutputStream();
+            performHandshake(input, output);
+            socket.setSoTimeout(0);
+
+            ProtocolFrame request = ProtocolFrame.request(
+                    decision, decisionCodec.encodeJobReference(jobId));
+            frameCodec.write(output, request);
+            ProtocolFrame response = frameCodec.read(input);
+            requireResponse(
+                    response, MessageType.JOB_DECISION_ACCEPTED, request.getRequestId());
+            UUID acceptedJobId = decisionCodec.decodeJobReference(response.getPayload());
+            if (!acceptedJobId.equals(jobId)) {
+                throw new ProtocolException(
+                        ProtocolError.CORRELATION_MISMATCH,
+                        "Server accepted a decision for a different job");
+            }
         }
     }
 

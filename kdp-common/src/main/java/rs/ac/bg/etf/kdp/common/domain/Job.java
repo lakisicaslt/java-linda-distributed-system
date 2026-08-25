@@ -114,9 +114,11 @@ public final class Job {
     public void abort(Instant occurredAt) {
         transitionTo(JobStatus.ABORTED, occurredAt);
         tasks.values().stream()
-                .filter(task -> !task.getStatus().isTerminal())
+                .filter(task -> task.getStatus() != TaskStatus.DONE)
+                .filter(task -> task.getStatus() != TaskStatus.ABORTED)
                 .forEach(task -> task.abort(occurredAt));
         finishedAt = occurredAt;
+        failureReason = null;
     }
 
     public UUID getId() {

@@ -16,7 +16,8 @@ public enum MessageType {
     GET_BATCH_RESULT(104, roles(ConnectionRole.CLIENT)),
     BATCH_RESULT(105, roles(ConnectionRole.CLIENT)),
     ABORT_JOB(106, roles(ConnectionRole.CLIENT)),
-    RETRY_TASK(107, roles(ConnectionRole.CLIENT)),
+    RETRY_JOB(107, roles(ConnectionRole.CLIENT)),
+    JOB_DECISION_ACCEPTED(108, roles(ConnectionRole.CLIENT)),
 
     REGISTER_WORKER(200, roles(ConnectionRole.WORKER)),
     WORKER_REGISTERED(201, roles(ConnectionRole.WORKER)),
