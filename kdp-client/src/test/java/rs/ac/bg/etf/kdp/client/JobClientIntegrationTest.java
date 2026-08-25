@@ -7,6 +7,7 @@ import rs.ac.bg.etf.kdp.common.domain.Job;
 import rs.ac.bg.etf.kdp.common.domain.JobSpecification;
 import rs.ac.bg.etf.kdp.common.domain.JobStatus;
 import rs.ac.bg.etf.kdp.common.protocol.BatchAcceptedMessage;
+import rs.ac.bg.etf.kdp.common.protocol.BatchResultMessage;
 import rs.ac.bg.etf.kdp.common.protocol.BatchStatusMessage;
 import rs.ac.bg.etf.kdp.common.protocol.ConnectionRole;
 import rs.ac.bg.etf.kdp.common.protocol.MessageType;
@@ -109,6 +110,8 @@ class JobClientIntegrationTest {
         BatchStatusMessage status = reconnectedClient.getBatchStatus(accepted.getBatchId());
         assertEquals(JobStatus.READY,
                 status.findJob(storedJob.getId()).orElseThrow().getStatus());
+        assertThrows(IOException.class, () -> reconnectedClient.downloadBatchResults(
+                accepted.getBatchId(), temporaryDirectory.resolve("premature-results")));
     }
 
     @Test
@@ -119,7 +122,8 @@ class JobClientIntegrationTest {
                 temporaryDirectory.resolve("end-to-end-jobs"));
         ServerTaskResultStore resultStore = new ServerTaskResultStore(
                 temporaryDirectory.resolve("end-to-end-results"));
-        ClientSessionHandler clientHandler = new ClientSessionHandler(jobStore, scheduler);
+        ClientSessionHandler clientHandler = new ClientSessionHandler(
+                jobStore, scheduler, resultStore);
         WorkerSessionHandler workerHandler = new WorkerSessionHandler(
                 registry, scheduler, resultStore);
         server = new CentralServer(
@@ -180,6 +184,21 @@ class JobClientIntegrationTest {
         BatchStatusMessage status = reconnectedClient.getBatchStatus(accepted.getBatchId());
         assertEquals(JobStatus.DONE,
                 status.findJob(job.getId()).orElseThrow().getStatus());
+
+        Path downloadedResults = temporaryDirectory.resolve("downloaded-results");
+        BatchResultMessage downloaded = reconnectedClient.downloadBatchResults(
+                accepted.getBatchId(), downloadedResults);
+        assertEquals(3, downloaded.getFiles().size());
+        Path downloadedJob = downloadedResults.resolve(job.getId().toString());
+        assertEquals("DISTRIBUTED RESULT", Files.readString(
+                downloadedJob.resolve("outputs").resolve("result.txt"),
+                StandardCharsets.UTF_8));
+        assertTrue(Files.readString(
+                downloadedJob.resolve("streams").resolve("stdout.txt"))
+                .contains(lindaLibrary.toAbsolutePath().toString()));
+        assertTrue(Files.readString(
+                downloadedJob.resolve("streams").resolve("stderr.txt"))
+                .contains("client end-to-end test"));
     }
 
     @Test

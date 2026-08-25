@@ -80,6 +80,12 @@ novu CLIENT sesiju i pomoću sačuvanog Batch ID-ja zatraži trenutni status svi
 poslova iz te grupe. Odgovor sadrži Job ID, status i razlog greške za `FAILED`
 posao, pa ponovno povezivanje ne zavisi od prethodne TCP konekcije.
 
+Kada svi poslovi iz grupe dostignu konačan status, klijent može preko nove sesije
+da preuzme rezultate pozivom `downloadBatchResults`. Server prvo šalje manifest,
+a zatim u blokovima strimuje deklarisane izlazne datoteke, `stdout` i `stderr`.
+Klijent proverava svaki prenos prema manifestu i čuva ga u direktorijumu izabranom
+pri pozivu, odvojeno po Job ID-ju u poddirektorijumima `outputs` i `streams`.
+
 Ručna provera iz IntelliJ IDEA:
 
 1. Pokrenuti `rs.ac.bg.etf.kdp.server.ServerMain` iz modula `kdp-server`.

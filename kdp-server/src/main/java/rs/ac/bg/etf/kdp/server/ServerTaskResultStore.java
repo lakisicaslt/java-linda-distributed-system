@@ -1,5 +1,8 @@
 package rs.ac.bg.etf.kdp.server;
 
+import rs.ac.bg.etf.kdp.common.domain.Job;
+import rs.ac.bg.etf.kdp.common.domain.JobStatus;
+import rs.ac.bg.etf.kdp.common.protocol.BatchResultFile;
 import rs.ac.bg.etf.kdp.common.protocol.FileTransferMetadata;
 import rs.ac.bg.etf.kdp.common.protocol.FileTransferProtocolCodec;
 import rs.ac.bg.etf.kdp.common.protocol.FileTransferReceiver;
@@ -11,8 +14,11 @@ import rs.ac.bg.etf.kdp.common.protocol.ReceivedFile;
 import rs.ac.bg.etf.kdp.common.protocol.TransferFileKind;
 
 import java.io.IOException;
+import java.nio.file.Files;
 import java.nio.file.Path;
+import java.util.ArrayList;
 import java.util.IdentityHashMap;
+import java.util.List;
 import java.util.Map;
 import java.util.Objects;
 import java.util.Optional;
@@ -76,6 +82,62 @@ public final class ServerTaskResultStore {
         return resultDirectory.resolve(taskId.toString());
     }
 
+    public List<StoredResultFile> findResults(Job job) throws IOException {
+        Objects.requireNonNull(job, "job must not be null");
+        UUID taskId = job.getRootTask().getId();
+        Path taskDirectory = taskDirectory(taskId);
+        List<StoredResultFile> results = new ArrayList<>();
+
+        for (String outputFileName : job.getSpecification().getOutputFileNames()) {
+            Path output = taskDirectory.resolve("outputs").resolve(outputFileName);
+            if (Files.isRegularFile(output)) {
+                results.add(storedResult(job, taskId, TransferFileKind.OUTPUT, output));
+            } else if (job.getStatus() == JobStatus.DONE) {
+                throw new IOException("Completed job is missing output file: " + outputFileName);
+            }
+        }
+
+        addIfPresent(
+                results,
+                job,
+                taskId,
+                TransferFileKind.STANDARD_OUTPUT,
+                taskDirectory.resolve("streams").resolve("stdout.txt"),
+                job.getStatus() == JobStatus.DONE);
+        addIfPresent(
+                results,
+                job,
+                taskId,
+                TransferFileKind.STANDARD_ERROR,
+                taskDirectory.resolve("streams").resolve("stderr.txt"),
+                job.getStatus() == JobStatus.DONE);
+        return List.copyOf(results);
+    }
+
+    private static void addIfPresent(
+            List<StoredResultFile> results,
+            Job job,
+            UUID taskId,
+            TransferFileKind kind,
+            Path path,
+            boolean required) throws IOException {
+        if (Files.isRegularFile(path)) {
+            results.add(storedResult(job, taskId, kind, path));
+        } else if (required) {
+            throw new IOException("Completed job is missing result stream: " + path.getFileName());
+        }
+    }
+
+    private static StoredResultFile storedResult(
+            Job job,
+            UUID taskId,
+            TransferFileKind kind,
+            Path path) throws IOException {
+        BatchResultFile description = new BatchResultFile(
+                job.getId(), taskId, kind, path.getFileName().toString(), Files.size(path));
+        return new StoredResultFile(description, path);
+    }
+
     private Path destinationDirectory(FileTransferMetadata metadata)
             throws ProtocolException {
         Path taskDirectory = taskDirectory(metadata.getOwnerId());
@@ -89,5 +151,13 @@ public final class ServerTaskResultStore {
 
     private static ProtocolException invalidPayload(String message) {
         return new ProtocolException(ProtocolError.INVALID_MESSAGE_PAYLOAD, message);
+    }
+
+    public record StoredResultFile(BatchResultFile description, Path path) {
+
+        public StoredResultFile {
+            Objects.requireNonNull(description, "result description must not be null");
+            Objects.requireNonNull(path, "result path must not be null");
+        }
     }
 }

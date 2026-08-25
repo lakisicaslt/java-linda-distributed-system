@@ -23,10 +23,13 @@ public final class ServerMain {
 
         WorkerRegistry workerRegistry = new WorkerRegistry();
         TaskScheduler taskScheduler = new TaskScheduler(workerRegistry);
+        ServerTaskResultStore resultStore = new ServerTaskResultStore(
+                Path.of("server-data", "results"));
         WorkerSessionHandler workerHandler = new WorkerSessionHandler(
-                workerRegistry, taskScheduler);
+                workerRegistry, taskScheduler, resultStore);
         ServerJobStore jobStore = new ServerJobStore(Path.of("server-data", "jobs"));
-        ClientSessionHandler clientHandler = new ClientSessionHandler(jobStore, taskScheduler);
+        ClientSessionHandler clientHandler = new ClientSessionHandler(
+                jobStore, taskScheduler, resultStore);
         ServerMessageHandler notImplemented = (connection, frame) -> {
             String message = "Message is not implemented yet: " + frame.getType();
             connection.send(frame.reply(MessageType.ERROR, message.getBytes(StandardCharsets.UTF_8)));

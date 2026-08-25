@@ -4,11 +4,16 @@ import rs.ac.bg.etf.kdp.common.domain.Job;
 import rs.ac.bg.etf.kdp.common.domain.JobBatch;
 import rs.ac.bg.etf.kdp.common.domain.JobStatus;
 import rs.ac.bg.etf.kdp.common.protocol.BatchAcceptedMessage;
+import rs.ac.bg.etf.kdp.common.protocol.BatchResultMessage;
+import rs.ac.bg.etf.kdp.common.protocol.BatchResultProtocolCodec;
 import rs.ac.bg.etf.kdp.common.protocol.BatchStatusMessage;
 import rs.ac.bg.etf.kdp.common.protocol.BatchStatusProtocolCodec;
 import rs.ac.bg.etf.kdp.common.protocol.BatchSubmissionMessage;
 import rs.ac.bg.etf.kdp.common.protocol.BatchSubmissionProtocolCodec;
 import rs.ac.bg.etf.kdp.common.protocol.ConnectionRole;
+import rs.ac.bg.etf.kdp.common.protocol.FileTransferMetadata;
+import rs.ac.bg.etf.kdp.common.protocol.FileTransferProtocolCodec;
+import rs.ac.bg.etf.kdp.common.protocol.FileTransferSender;
 import rs.ac.bg.etf.kdp.common.protocol.MessageType;
 import rs.ac.bg.etf.kdp.common.protocol.ProtocolError;
 import rs.ac.bg.etf.kdp.common.protocol.ProtocolException;
@@ -18,6 +23,7 @@ import rs.ac.bg.etf.kdp.common.protocol.JobStatusSnapshot;
 
 import java.io.IOException;
 import java.nio.file.Path;
+import java.util.ArrayList;
 import java.util.HashSet;
 import java.util.IdentityHashMap;
 import java.util.List;
@@ -32,15 +38,33 @@ public final class ClientSessionHandler implements ServerMessageHandler {
 
     private final ServerJobStore jobStore;
     private final TaskScheduler scheduler;
+    private final ServerTaskResultStore resultStore;
     private final BatchSubmissionProtocolCodec submissionCodec =
             new BatchSubmissionProtocolCodec();
     private final BatchStatusProtocolCodec statusCodec = new BatchStatusProtocolCodec();
+    private final BatchResultProtocolCodec resultCodec = new BatchResultProtocolCodec();
+    private final FileTransferProtocolCodec fileCodec = new FileTransferProtocolCodec();
+    private final FileTransferSender fileSender = new FileTransferSender();
     private final Map<ServerConnection, Set<UUID>> submittedJobIds =
+            new IdentityHashMap<>();
+    private final Map<ServerConnection, Set<UUID>> pendingResultTransfers =
             new IdentityHashMap<>();
 
     public ClientSessionHandler(ServerJobStore jobStore, TaskScheduler scheduler) {
+        this(
+                jobStore,
+                scheduler,
+                new ServerTaskResultStore(Path.of("server-data", "results")));
+    }
+
+    public ClientSessionHandler(
+            ServerJobStore jobStore,
+            TaskScheduler scheduler,
+            ServerTaskResultStore resultStore) {
         this.jobStore = Objects.requireNonNull(jobStore, "job store must not be null");
         this.scheduler = Objects.requireNonNull(scheduler, "task scheduler must not be null");
+        this.resultStore = Objects.requireNonNull(
+                resultStore, "task result store must not be null");
     }
 
     @Override
@@ -51,6 +75,7 @@ public final class ClientSessionHandler implements ServerMessageHandler {
                     "Client session handler only accepts client connections");
         }
         submittedJobIds.put(connection, new HashSet<>());
+        pendingResultTransfers.put(connection, new HashSet<>());
     }
 
     @Override
@@ -60,6 +85,10 @@ public final class ClientSessionHandler implements ServerMessageHandler {
                 submitBatch(connection, frame);
             } else if (frame.getType() == MessageType.GET_BATCH_STATUS) {
                 sendBatchStatus(connection, frame);
+            } else if (frame.getType() == MessageType.GET_BATCH_RESULT) {
+                sendBatchResult(connection, frame);
+            } else if (frame.getType() == MessageType.FILE_ACKNOWLEDGED) {
+                acknowledgeResultFile(connection, frame);
             } else if (frame.getType() == MessageType.FILE_BEGIN
                     || frame.getType() == MessageType.FILE_CHUNK
                     || frame.getType() == MessageType.FILE_END) {
@@ -79,6 +108,7 @@ public final class ClientSessionHandler implements ServerMessageHandler {
     public synchronized void onDisconnected(ServerConnection connection) {
         jobStore.disconnect(connection);
         submittedJobIds.remove(connection);
+        pendingResultTransfers.remove(connection);
     }
 
     private void submitBatch(ServerConnection connection, ProtocolFrame frame)
@@ -134,6 +164,71 @@ public final class ClientSessionHandler implements ServerMessageHandler {
                 MessageType.BATCH_STATUS, statusCodec.encodeStatus(status)));
     }
 
+    private void sendBatchResult(ServerConnection connection, ProtocolFrame frame)
+            throws IOException {
+        UUID batchId = statusCodec.decodeBatchReference(frame.getPayload());
+        JobBatch batch = jobStore.findBatch(batchId).orElseThrow(() ->
+                new ProtocolException(
+                        ProtocolError.INVALID_MESSAGE_PAYLOAD,
+                        "Requested batch does not exist"));
+        synchronized (scheduler) {
+            boolean unfinishedJob = batch.getJobs().stream()
+                    .anyMatch(job -> !job.getStatus().isTerminal());
+            if (unfinishedJob) {
+                throw new ProtocolException(
+                        ProtocolError.INVALID_MESSAGE_PAYLOAD,
+                        "Batch results are available only after all jobs finish");
+            }
+        }
+
+        List<ServerTaskResultStore.StoredResultFile> storedFiles = new ArrayList<>();
+        for (Job job : batch.getJobs()) {
+            storedFiles.addAll(resultStore.findResults(job));
+        }
+        BatchResultMessage result = new BatchResultMessage(
+                batchId,
+                storedFiles.stream().map(file -> file.description()).toList());
+        connection.send(frame.reply(MessageType.BATCH_RESULT, resultCodec.encode(result)));
+
+        for (ServerTaskResultStore.StoredResultFile storedFile : storedFiles) {
+            sendResultFile(connection, storedFile);
+        }
+    }
+
+    private void sendResultFile(
+            ServerConnection connection,
+            ServerTaskResultStore.StoredResultFile storedFile) throws IOException {
+        FileTransferMetadata metadata = new FileTransferMetadata(
+                storedFile.description().getTaskId(),
+                storedFile.description().getKind(),
+                storedFile.description().getFileName(),
+                storedFile.description().getSize());
+        UUID transferId = UUID.randomUUID();
+        synchronized (this) {
+            requireResultSession(connection).add(transferId);
+        }
+        try {
+            fileSender.send(transferId, storedFile.path(), metadata, connection::send);
+        } catch (IOException | RuntimeException exception) {
+            synchronized (this) {
+                requireResultSession(connection).remove(transferId);
+            }
+            throw exception;
+        }
+    }
+
+    private void acknowledgeResultFile(ServerConnection connection, ProtocolFrame frame)
+            throws ProtocolException {
+        fileCodec.verifyAcknowledgement(frame, frame.getRequestId());
+        synchronized (this) {
+            if (!requireResultSession(connection).remove(frame.getRequestId())) {
+                throw new ProtocolException(
+                        ProtocolError.CORRELATION_MISMATCH,
+                        "Result acknowledgement does not match a pending transfer");
+            }
+        }
+    }
+
     private void scheduleCompleteJob(UUID jobId) throws IOException {
         Optional<Job> completeJob = jobStore.claimForScheduling(jobId);
         if (completeJob.isEmpty()) {
@@ -154,5 +249,16 @@ public final class ClientSessionHandler implements ServerMessageHandler {
                     "Client connection is not registered in the session handler");
         }
         return ids;
+    }
+
+    private Set<UUID> requireResultSession(ServerConnection connection)
+            throws ProtocolException {
+        Set<UUID> transferIds = pendingResultTransfers.get(connection);
+        if (transferIds == null) {
+            throw new ProtocolException(
+                    ProtocolError.INVALID_MESSAGE_PAYLOAD,
+                    "Client result session is not registered");
+        }
+        return transferIds;
     }
 }

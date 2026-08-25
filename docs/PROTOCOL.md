@@ -82,6 +82,33 @@ Odgovor sadrži Batch ID, broj poslova i za svaki posao:
 Statusni upit ne zavisi od konekcije kojom je posao predat. Klijentu je dovoljan
 Batch ID koji je dobio u poruci `BATCH_ACCEPTED`.
 
+## Preuzimanje rezultata
+
+Kada su svi poslovi iz grupe u konačnom statusu, klijent može u novoj CLIENT sesiji
+da pošalje `GET_BATCH_RESULT` sa Batch ID-jem. Server odgovara porukom
+`BATCH_RESULT` sa istim request ID-jem. Odgovor je manifest koji za svaki raspoloživ
+fajl sadrži Job ID, Task ID, vrstu fajla, ime i veličinu.
+
+Posle manifesta server šalje svaki navedeni fajl standardnim nizom poruka:
+
+```text
+FILE_BEGIN -> FILE_CHUNK ... -> FILE_END
+```
+
+Klijent proverava da metadata iz `FILE_BEGIN` odgovara manifestu, upisuje sadržaj
+direktno na disk i za svaki potpuno primljen fajl vraća `FILE_ACKNOWLEDGED`. Fajlovi
+se na klijentskom računaru čuvaju u sledećoj strukturi:
+
+```text
+<izabrani-direktorijum>/<job-id>/outputs
+<izabrani-direktorijum>/<job-id>/streams
+```
+
+Manifest može sadržati deklarisane `OUTPUT` datoteke i tokove `STANDARD_OUTPUT` i
+`STANDARD_ERROR`. Za neuspešan ili prekinut posao server šalje samo rezultate koji
+su stvarno primljeni pre neuspeha. Zahtev se odbija dok postoji posao koji još nije
+u konačnom statusu.
+
 ## Registracija radne stanice
 
 WORKER sesija odmah nakon handshake-a šalje `REGISTER_WORKER`. Payload redom sadrži:
