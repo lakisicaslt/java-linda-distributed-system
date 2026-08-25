@@ -152,6 +152,11 @@ public final class Job {
                 .toList();
     }
 
+    public boolean areAllTasksDone() {
+        return tasks.values().stream()
+                .allMatch(task -> task.getStatus() == TaskStatus.DONE);
+    }
+
     public JobStatus getStatus() {
         return status;
     }

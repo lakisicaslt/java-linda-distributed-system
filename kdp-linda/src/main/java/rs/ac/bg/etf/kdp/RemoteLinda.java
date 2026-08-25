@@ -1,6 +1,9 @@
 package rs.ac.bg.etf.kdp;
 
+import java.io.ByteArrayOutputStream;
 import java.io.IOException;
+import java.io.ObjectOutputStream;
+import java.io.Serializable;
 import java.util.Objects;
 import java.util.UUID;
 
@@ -56,7 +59,24 @@ public final class RemoteLinda implements Linda {
 
     @Override
     public void eval(String name, Runnable thread) {
-        throw new UnsupportedOperationException("Distributed eval is not implemented yet");
+        Objects.requireNonNull(name, "eval name must not be null");
+        Objects.requireNonNull(thread, "eval runnable must not be null");
+        if (name.isBlank()) {
+            throw new IllegalArgumentException("eval name must not be blank");
+        }
+        if (!(thread instanceof Serializable)) {
+            throw new LindaException("Eval runnable must implement Serializable");
+        }
+        try {
+            ByteArrayOutputStream bytes = new ByteArrayOutputStream();
+            try (ObjectOutputStream output = new ObjectOutputStream(bytes)) {
+                output.writeObject(thread);
+            }
+            LindaWireProtocol.eval(
+                    serverHost, serverPort, batchId, taskId, name.trim(), bytes.toByteArray());
+        } catch (IOException exception) {
+            throw new LindaException("Could not submit Linda eval task", exception);
+        }
     }
 
     private LindaWireProtocol.Result execute(

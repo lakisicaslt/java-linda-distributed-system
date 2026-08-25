@@ -7,6 +7,7 @@ import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.Future;
 import java.util.concurrent.TimeUnit;
+import java.util.UUID;
 
 import static org.junit.jupiter.api.Assertions.assertArrayEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
@@ -75,5 +76,14 @@ class LocalLindaTest {
         assertThrows(NullPointerException.class,
                 () -> linda.out(new String[]{"value", null}));
         assertThrows(NullPointerException.class, () -> linda.in(null));
+    }
+
+    @Test
+    void remoteEvalRejectsRunnableThatCannotBeSerialized() {
+        RemoteLinda linda = new RemoteLinda(
+                "127.0.0.1", 5_050, UUID.randomUUID(), UUID.randomUUID());
+
+        assertThrows(LindaException.class,
+                () -> linda.eval("not serializable", () -> { }));
     }
 }

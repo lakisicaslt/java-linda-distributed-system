@@ -35,7 +35,7 @@ public final class ServerMain {
                 Path.of("server-data", "jobs"), Clock.systemUTC(), jobLogger);
         ClientSessionHandler clientHandler = new ClientSessionHandler(
                 jobStore, taskScheduler, resultStore);
-        LindaSessionHandler lindaHandler = new LindaSessionHandler(jobStore);
+        LindaSessionHandler lindaHandler = new LindaSessionHandler(jobStore, taskScheduler);
         ServerMessageHandler notImplemented = (connection, frame) -> {
             String message = "Message is not implemented yet: " + frame.getType();
             connection.send(frame.reply(MessageType.ERROR, message.getBytes(StandardCharsets.UTF_8)));

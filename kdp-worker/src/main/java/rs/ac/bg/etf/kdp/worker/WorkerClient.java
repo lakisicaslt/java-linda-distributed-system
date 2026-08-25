@@ -322,15 +322,27 @@ public final class WorkerClient implements AutoCloseable {
         UUID taskId = execution.getTaskId();
         try {
             reportTaskStarted(taskId);
-            JavaTaskResult result = taskRunner.run(
-                    execution.getSpecification(),
-                    fileStore.taskDirectory(taskId),
-                    config.getLindaLibrary(),
-                    new LindaConnectionInfo(
-                            config.getServerHost(),
-                            config.getServerPort(),
-                            execution.getBatchId(),
-                            taskId));
+            LindaConnectionInfo lindaConnection = new LindaConnectionInfo(
+                    config.getServerHost(),
+                    config.getServerPort(),
+                    execution.getBatchId(),
+                    taskId);
+            JavaTaskResult result;
+            if (execution.isEvalTask()) {
+                result = taskRunner.runEval(
+                        execution.getSpecification(),
+                        fileStore.taskDirectory(taskId),
+                        config.getLindaLibrary(),
+                        lindaConnection,
+                        execution.getEvalName(),
+                        execution.getSerializedRunnable());
+            } else {
+                result = taskRunner.run(
+                        execution.getSpecification(),
+                        fileStore.taskDirectory(taskId),
+                        config.getLindaLibrary(),
+                        lindaConnection);
+            }
             sendTaskResults(taskId, result);
             if (result.isSuccessful()) {
                 reportTaskFinished(taskId);

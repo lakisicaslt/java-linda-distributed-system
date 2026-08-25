@@ -182,8 +182,10 @@ korisnik bira da li se prekinuti deo ponavlja ili se odustaje od celog posla.
 
 Nakon što worker potvrdi dodelu i prijem svih datoteka, server šalje `EXECUTE_TASK`.
 Payload sadrži Batch ID, Task ID, ime JAR-a, JVM argumente, programske argumente i liste
-ulaznih i izlaznih datoteka. Server ne šalje ovu poruku dok postoji prenos datoteke
-za taj zadatak koji worker još nije potvrdio.
+ulaznih i izlaznih datoteka. Poslednje polje označava da li je u pitanju `EVAL`
+zadatak; u tom slučaju iza njega se nalaze dužina i bajtovi serijalizovanog
+`Runnable` objekta. Server ne šalje ovu poruku dok postoji prenos datoteke za taj
+zadatak koji worker još nije potvrdio.
 
 ## Linda prostor torki
 
@@ -207,6 +209,19 @@ je `boolean matched`. Za uspešnu operaciju iza njega se nalazi pronađena torka
 istom formatu. Kod neuspešnog `inp` ili `rdp` torka se ne šalje. `in` i `rd` ne
 odgovaraju dok se ne pojavi odgovarajuća torka, ali njihovo čekanje ne blokira
 obradu drugih serverskih konekcija.
+
+Poziv `eval(name, runnable)` šalje poruku `LINDA_EVAL`. Njen payload sadrži Batch ID,
+Task ID roditelja, UTF-8 naziv novog zadatka i serijalizovani `Runnable`. Server
+proverava da je roditelj trenutno aktivan, dodaje novi `EVAL` zadatak istom poslu i
+predaje ga scheduleru. Nakon uspešnog prihvatanja zahteva odgovara porukom
+`LINDA_RESULT` sa praznom torkom.
+
+Worker koji dobije `EVAL` zadatak prima originalni JAR i ulazne datoteke roditeljskog
+posla. U zasebnom JVM-u učitava klasu iz tog JAR-a, deserijalizuje objekat i poziva
+njegovu metodu `run`. Konkretna klasa mora da implementira `Serializable`. Svaki
+`EVAL` zadatak dobija sopstveni Task ID, ali zadržava Batch ID roditelja, pa sve
+njegove Linda operacije koriste isti prostor torki. Završetak korenskog zadatka ne
+završava posao dok postoji nezavršen `EVAL` zadatak.
 
 ## Status izvršavanja zadatka
 

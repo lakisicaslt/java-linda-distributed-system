@@ -37,6 +37,28 @@ final class LindaWireProtocol {
             UUID taskId,
             Operation operation,
             String[] tuple) throws IOException {
+        return send(host, port, operation.code, encodeRequest(batchId, taskId, tuple));
+    }
+
+    static void eval(
+            String host,
+            int port,
+            UUID batchId,
+            UUID parentTaskId,
+            String name,
+            byte[] serializedRunnable) throws IOException {
+        Result result = send(
+                host,
+                port,
+                Operation.EVAL.code,
+                encodeEvalRequest(batchId, parentTaskId, name, serializedRunnable));
+        if (!result.matched() || result.tuple() == null || result.tuple().length != 0) {
+            throw new IOException("Server returned an invalid Linda eval acknowledgement");
+        }
+    }
+
+    private static Result send(String host, int port, int operation, byte[] requestPayload)
+            throws IOException {
         try (Socket socket = new Socket()) {
             socket.connect(new InetSocketAddress(host, port), CONNECT_TIMEOUT_MILLIS);
             socket.setTcpNoDelay(true);
@@ -52,7 +74,7 @@ final class LindaWireProtocol {
 
             socket.setSoTimeout(0);
             UUID requestId = UUID.randomUUID();
-            writeFrame(output, operation.code, requestId, encodeRequest(batchId, taskId, tuple));
+            writeFrame(output, operation, requestId, requestPayload);
             Frame response = readFrame(input);
             if (response.type == ERROR) {
                 throw new IOException(new String(response.payload, StandardCharsets.UTF_8));
@@ -60,6 +82,26 @@ final class LindaWireProtocol {
             requireResponse(response, LINDA_RESULT, requestId);
             return decodeResult(response.payload);
         }
+    }
+
+    private static byte[] encodeEvalRequest(
+            UUID batchId,
+            UUID parentTaskId,
+            String name,
+            byte[] serializedRunnable) throws IOException {
+        ByteArrayOutputStream bytes = new ByteArrayOutputStream();
+        DataOutputStream output = new DataOutputStream(bytes);
+        writeUuid(output, batchId);
+        writeUuid(output, parentTaskId);
+        writeString(output, name, 4_096, "eval name");
+        output.writeInt(serializedRunnable.length);
+        output.write(serializedRunnable);
+        output.flush();
+        byte[] payload = bytes.toByteArray();
+        if (payload.length > MAX_PAYLOAD_SIZE) {
+            throw new IllegalArgumentException("Linda eval request is too large");
+        }
+        return payload;
     }
 
     private static byte[] encodeRequest(UUID batchId, UUID taskId, String[] tuple)
@@ -96,14 +138,22 @@ final class LindaWireProtocol {
         for (String field : tuple) {
             output.writeBoolean(field != null);
             if (field != null) {
-                byte[] encoded = field.getBytes(StandardCharsets.UTF_8);
-                if (encoded.length > MAX_FIELD_BYTES) {
-                    throw new IllegalArgumentException("Linda tuple field is too long");
-                }
-                output.writeInt(encoded.length);
-                output.write(encoded);
+                writeString(output, field, MAX_FIELD_BYTES, "Linda tuple field");
             }
         }
+    }
+
+    private static void writeString(
+            DataOutputStream output,
+            String value,
+            int maximumLength,
+            String fieldName) throws IOException {
+        byte[] encoded = value.getBytes(StandardCharsets.UTF_8);
+        if (encoded.length > maximumLength) {
+            throw new IllegalArgumentException(fieldName + " is too long");
+        }
+        output.writeInt(encoded.length);
+        output.write(encoded);
     }
 
     private static String[] readTuple(DataInputStream input) throws IOException {
@@ -188,7 +238,8 @@ final class LindaWireProtocol {
         IN(401),
         INP(402),
         RD(403),
-        RDP(404);
+        RDP(404),
+        EVAL(405);
 
         private final int code;
 

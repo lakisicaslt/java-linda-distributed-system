@@ -50,7 +50,7 @@ class ServerLindaIntegrationTest {
                 "job.jar", List.of(), List.of(), List.of(), List.of());
         JobBatch firstBatch = store.createBatch(List.of(specification, specification));
         JobBatch secondBatch = store.createBatch(List.of(specification));
-        lindaHandler = new LindaSessionHandler(store);
+        lindaHandler = new LindaSessionHandler(store, new TaskScheduler(new WorkerRegistry()));
         server = new CentralServer(
                 new ServerConfig("127.0.0.1", 0, 10, 8, 1_000),
                 new ServerMessageRouter(

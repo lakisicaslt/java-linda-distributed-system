@@ -39,11 +39,29 @@ class LindaProtocolCodecTest {
     }
 
     @Test
+    void roundTripsEvalRequest() throws Exception {
+        LindaEvalRequestMessage original = new LindaEvalRequestMessage(
+                UUID.randomUUID(),
+                UUID.randomUUID(),
+                "partial calculation",
+                new byte[]{10, 20, 30});
+
+        LindaEvalRequestMessage decoded = codec.decodeEvalRequest(
+                codec.encodeEvalRequest(original));
+
+        assertEquals(original.getBatchId(), decoded.getBatchId());
+        assertEquals(original.getParentTaskId(), decoded.getParentTaskId());
+        assertEquals("partial calculation", decoded.getName());
+        assertArrayEquals(new byte[]{10, 20, 30}, decoded.getSerializedRunnable());
+    }
+
+    @Test
     void rejectsTruncatedAndTrailingPayloads() {
         byte[] valid = codec.encodeResult(new LindaResultMessage(false, null));
         byte[] trailing = {valid[0], 1};
 
         assertThrows(ProtocolException.class, () -> codec.decodeRequest(new byte[10]));
+        assertThrows(ProtocolException.class, () -> codec.decodeEvalRequest(new byte[10]));
         assertThrows(ProtocolException.class, () -> codec.decodeResult(trailing));
     }
 }

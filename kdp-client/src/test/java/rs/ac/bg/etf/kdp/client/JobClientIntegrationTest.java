@@ -8,6 +8,7 @@ import rs.ac.bg.etf.kdp.common.domain.Job;
 import rs.ac.bg.etf.kdp.common.domain.JobSpecification;
 import rs.ac.bg.etf.kdp.common.domain.JobStatus;
 import rs.ac.bg.etf.kdp.common.domain.TaskStatus;
+import rs.ac.bg.etf.kdp.common.domain.TaskType;
 import rs.ac.bg.etf.kdp.common.domain.WorkerStatus;
 import rs.ac.bg.etf.kdp.common.protocol.BatchAcceptedMessage;
 import rs.ac.bg.etf.kdp.common.protocol.BatchResultMessage;
@@ -46,6 +47,7 @@ import java.util.stream.Stream;
 
 import static org.junit.jupiter.api.Assertions.assertArrayEquals;
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertNotEquals;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
@@ -56,12 +58,16 @@ class JobClientIntegrationTest {
 
     private CentralServer server;
     private WorkerClient workerClient;
+    private WorkerClient secondWorkerClient;
     private LindaSessionHandler lindaHandler;
 
     @AfterEach
     void stopServer() {
         if (workerClient != null) {
             workerClient.close();
+        }
+        if (secondWorkerClient != null) {
+            secondWorkerClient.close();
         }
         if (lindaHandler != null) {
             lindaHandler.close();
@@ -72,6 +78,88 @@ class JobClientIntegrationTest {
     }
 
     @Test
+    void executesLindaEvalOnAnotherAvailableWorker() throws Exception {
+        WorkerRegistry registry = new WorkerRegistry();
+        TaskScheduler scheduler = new TaskScheduler(registry);
+        ServerJobStore jobStore = new ServerJobStore(
+                temporaryDirectory.resolve("eval-jobs"));
+        ServerTaskResultStore resultStore = new ServerTaskResultStore(
+                temporaryDirectory.resolve("eval-results"));
+        lindaHandler = new LindaSessionHandler(jobStore, scheduler);
+        server = new CentralServer(
+                new ServerConfig("127.0.0.1", 0, 10, 8, 1_000),
+                new ServerMessageRouter(
+                        Map.of(
+                                ConnectionRole.CLIENT,
+                                new ClientSessionHandler(jobStore, scheduler, resultStore),
+                                ConnectionRole.WORKER,
+                                new WorkerSessionHandler(registry, scheduler, resultStore),
+                                ConnectionRole.LINDA,
+                                lindaHandler),
+                        (connection, frame) -> connection.send(frame.reply(
+                                MessageType.ERROR, new byte[0]))));
+        server.start();
+
+        Path lindaLibrary = temporaryDirectory.resolve("eval-kdp-linda.jar");
+        createLindaLibrary(lindaLibrary);
+        workerClient = new WorkerClient(workerConfig(
+                server.getLocalPort(),
+                temporaryDirectory.resolve("eval-worker-one"),
+                lindaLibrary));
+        secondWorkerClient = new WorkerClient(workerConfig(
+                server.getLocalPort(),
+                temporaryDirectory.resolve("eval-worker-two"),
+                lindaLibrary));
+        workerClient.start();
+        secondWorkerClient.start();
+
+        Path jobArchive = temporaryDirectory.resolve("eval-job.jar");
+        createJobArchive(
+                jobArchive,
+                EvalExecutionTestProgram.class,
+                EvalTestRunnable.class);
+        JobSpecification specification = new JobSpecification(
+                "eval-job.jar",
+                List.of(),
+                List.of("result.txt"),
+                List.of(),
+                List.of("result.txt"));
+        JobClient client = new JobClient(new ClientConfig(
+                "127.0.0.1", server.getLocalPort(), 1_000, 1_000));
+
+        BatchAcceptedMessage accepted = client.submit(List.of(
+                new JobSubmission(specification, jobArchive, List.of())));
+        Job job = jobStore.findJob(accepted.getJobIds().get(0)).orElseThrow();
+
+        assertTrue(await(() -> job.getStatus() == JobStatus.DONE));
+        assertEquals(2, job.getTasks().size());
+        assertEquals(TaskType.EVAL, job.getTasks().get(1).getType());
+        assertNotEquals(
+                job.getRootTask().getAssignedWorkerId().orElseThrow(),
+                job.getTasks().get(1).getAssignedWorkerId().orElseThrow());
+        assertEquals("computed remotely|remote calculation", Files.readString(resultStore
+                .taskDirectory(job.getRootTask().getId())
+                .resolve("outputs")
+                .resolve("result.txt"), StandardCharsets.UTF_8));
+        assertTrue(Files.readString(resultStore
+                .taskDirectory(job.getTasks().get(1).getId())
+                .resolve("streams")
+                .resolve("stdout.txt"), StandardCharsets.UTF_8)
+                .contains("eval task completed"));
+        assertEquals(5, resultStore.findResults(job).size());
+
+        Path downloadedDirectory = temporaryDirectory.resolve("eval-downloaded");
+        BatchResultMessage downloaded = client.downloadBatchResults(
+                accepted.getBatchId(), downloadedDirectory);
+        assertEquals(5, downloaded.getFiles().size());
+        assertTrue(Files.readString(downloadedDirectory
+                .resolve(job.getId().toString())
+                .resolve("streams")
+                .resolve(job.getTasks().get(1).getId() + "-stdout.txt"),
+                StandardCharsets.UTF_8).contains("eval task completed"));
+    }
+
+    @Test
     void sharesLindaTuplesBetweenJobsInTheSameBatch() throws Exception {
         WorkerRegistry registry = new WorkerRegistry();
         TaskScheduler scheduler = new TaskScheduler(registry);
@@ -79,7 +167,7 @@ class JobClientIntegrationTest {
                 temporaryDirectory.resolve("linda-jobs"));
         ServerTaskResultStore resultStore = new ServerTaskResultStore(
                 temporaryDirectory.resolve("linda-results"));
-        lindaHandler = new LindaSessionHandler(jobStore);
+        lindaHandler = new LindaSessionHandler(jobStore, scheduler);
         server = new CentralServer(
                 new ServerConfig("127.0.0.1", 0, 10, 8, 1_000),
                 new ServerMessageRouter(
@@ -411,20 +499,46 @@ class JobClientIntegrationTest {
         createJobArchive(target, ClientExecutionTestProgram.class);
     }
 
-    private static void createJobArchive(Path target, Class<?> mainClass) throws IOException {
+    private static WorkerConfig workerConfig(
+            int serverPort,
+            Path workDirectory,
+            Path lindaLibrary) {
+        return new WorkerConfig(
+                "127.0.0.1",
+                serverPort,
+                UUID.randomUUID(),
+                1,
+                1_000,
+                1_000,
+                100,
+                workDirectory,
+                lindaLibrary);
+    }
+
+    private static void createJobArchive(
+            Path target,
+            Class<?> mainClass,
+            Class<?>... additionalClasses) throws IOException {
         Manifest manifest = new Manifest();
         manifest.getMainAttributes().put(Attributes.Name.MANIFEST_VERSION, "1.0");
         manifest.getMainAttributes().put(
                 Attributes.Name.MAIN_CLASS, mainClass.getName());
 
-        String classEntryName = mainClass.getName()
-                .replace('.', '/') + ".class";
-        try (InputStream classBytes = mainClass.getClassLoader()
-                .getResourceAsStream(classEntryName);
-             JarOutputStream archive = new JarOutputStream(
+        try (JarOutputStream archive = new JarOutputStream(
                      Files.newOutputStream(target), manifest)) {
+            addClass(archive, mainClass);
+            for (Class<?> additionalClass : additionalClasses) {
+                addClass(archive, additionalClass);
+            }
+        }
+    }
+
+    private static void addClass(JarOutputStream archive, Class<?> type) throws IOException {
+        String classEntryName = type.getName().replace('.', '/') + ".class";
+        try (InputStream classBytes = type.getClassLoader()
+                .getResourceAsStream(classEntryName)) {
             if (classBytes == null) {
-                throw new IOException("Could not find compiled client test program");
+                throw new IOException("Could not find compiled test class: " + type.getName());
             }
             archive.putNextEntry(new JarEntry(classEntryName));
             classBytes.transferTo(archive);

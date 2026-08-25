@@ -122,6 +122,41 @@ public final class TaskScheduler {
         dispatchAvailableTasks();
     }
 
+    public synchronized UUID submitEval(
+            Job job,
+            UUID parentTaskId,
+            String name,
+            byte[] serializedRunnable) throws IOException {
+        Job scheduledJob = requireScheduledJob(job);
+        Objects.requireNonNull(parentTaskId, "parent task id must not be null");
+        Task parentTask = scheduledJob.findTask(parentTaskId).orElseThrow(() ->
+                new IllegalArgumentException("eval parent task does not belong to the job"));
+        Objects.requireNonNull(serializedRunnable, "serialized runnable must not be null");
+        if (serializedRunnable.length == 0) {
+            throw new IllegalArgumentException("serialized runnable must not be empty");
+        }
+
+        PreparedExecution rootExecution = preparedExecutions.get(
+                scheduledJob.getRootTask().getId());
+        if (rootExecution == null) {
+            throw new IllegalStateException("job files are not prepared for eval execution");
+        }
+
+        Instant occurredAt = clock.instant();
+        Task evalTask = Task.eval(
+                UUID.randomUUID(),
+                scheduledJob.getId(),
+                parentTask.getId(),
+                name,
+                occurredAt);
+        scheduledJob.addEvalTask(evalTask);
+        jobsByTaskId.put(evalTask.getId(), scheduledJob);
+        preparedExecutions.put(
+                evalTask.getId(), rootExecution.withRunnable(serializedRunnable));
+        submit(evalTask);
+        return evalTask.getId();
+    }
+
     public synchronized UUID accept(ServerConnection connection, ProtocolFrame frame)
             throws ProtocolException {
         UUID taskId = taskCodec.decodeTaskReference(frame.getPayload());
@@ -306,12 +341,18 @@ public final class TaskScheduler {
         UUID workerId = task.getAssignedWorkerId().orElseThrow();
         Job job = jobsByTaskId.get(taskId);
         UUID batchId = job == null ? task.getJobId() : job.getBatchId();
+        PreparedExecution prepared = preparedExecutions.get(taskId);
+        byte[] serializedRunnable = prepared == null ? null : prepared.serializedRunnable;
         ServerConnection connection = workerRegistry.findConnection(workerId)
                 .orElseThrow(() -> new IOException("assigned worker is no longer connected"));
         ProtocolFrame request = ProtocolFrame.request(
                 MessageType.EXECUTE_TASK,
                 executionCodec.encode(new TaskExecutionMessage(
-                        batchId, taskId, specification)));
+                        batchId,
+                        taskId,
+                        specification,
+                        serializedRunnable == null ? null : task.getName(),
+                        serializedRunnable)));
         executionRequestedTaskIds.add(taskId);
         executionSpecifications.put(taskId, specification);
         try {
@@ -580,7 +621,9 @@ public final class TaskScheduler {
 
     private void markJobDone(Task task, Instant occurredAt) {
         Job job = jobsByTaskId.get(task.getId());
-        if (job != null && job.getStatus() == JobStatus.RUNNING) {
+        if (job != null
+                && job.getStatus() == JobStatus.RUNNING
+                && job.areAllTasksDone()) {
             job.markDone(occurredAt);
             recordStatus(job, task);
         }
@@ -610,6 +653,7 @@ public final class TaskScheduler {
         private final JobSpecification specification;
         private final Path archive;
         private final Map<String, Path> inputFiles;
+        private final byte[] serializedRunnable;
 
         private PreparedExecution(
                 JobSpecification specification,
@@ -638,6 +682,18 @@ public final class TaskScheduler {
                         "prepared inputs must match the job specification");
             }
             this.inputFiles = Map.copyOf(filesByName);
+            this.serializedRunnable = null;
+        }
+
+        private PreparedExecution(PreparedExecution source, byte[] serializedRunnable) {
+            this.specification = source.specification;
+            this.archive = source.archive;
+            this.inputFiles = source.inputFiles;
+            this.serializedRunnable = serializedRunnable.clone();
+        }
+
+        private PreparedExecution withRunnable(byte[] serializedRunnable) {
+            return new PreparedExecution(this, serializedRunnable);
         }
 
         private static Path requireRegularFile(Path path, String fieldName) throws IOException {

@@ -8,7 +8,10 @@ import java.util.List;
 import java.util.UUID;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertArrayEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertThrows;
+import static org.junit.jupiter.api.Assertions.assertTrue;
 
 class TaskExecutionProtocolCodecTest {
 
@@ -30,11 +33,31 @@ class TaskExecutionProtocolCodecTest {
 
         assertEquals(batchId, decoded.getBatchId());
         assertEquals(taskId, decoded.getTaskId());
+        assertFalse(decoded.isEvalTask());
         assertEquals("calculation.jar", decoded.getSpecification().getJarFileName());
         assertEquals(List.of("-Xmx512m"), decoded.getSpecification().getJvmArguments());
         assertEquals(List.of("10", "20"), decoded.getSpecification().getProgramArguments());
         assertEquals(List.of("input.txt"), decoded.getSpecification().getInputFileNames());
         assertEquals(List.of("result.txt"), decoded.getSpecification().getOutputFileNames());
+    }
+
+    @Test
+    void roundTripsSerializedEvalRunnable() throws Exception {
+        byte[] runnable = {1, 2, 3, 4};
+        JobSpecification specification = new JobSpecification(
+                "eval.jar", List.of(), List.of(), List.of(), List.of());
+
+        TaskExecutionMessage decoded = codec.decode(codec.encode(
+                new TaskExecutionMessage(
+                        UUID.randomUUID(),
+                        UUID.randomUUID(),
+                        specification,
+                        "partial calculation",
+                        runnable)));
+
+        assertTrue(decoded.isEvalTask());
+        assertEquals("partial calculation", decoded.getEvalName());
+        assertArrayEquals(runnable, decoded.getSerializedRunnable());
     }
 
     @Test

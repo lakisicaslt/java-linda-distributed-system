@@ -2,7 +2,9 @@ package rs.ac.bg.etf.kdp.server;
 
 import rs.ac.bg.etf.kdp.LindaException;
 import rs.ac.bg.etf.kdp.LocalLinda;
+import rs.ac.bg.etf.kdp.common.domain.Job;
 import rs.ac.bg.etf.kdp.common.protocol.ConnectionRole;
+import rs.ac.bg.etf.kdp.common.protocol.LindaEvalRequestMessage;
 import rs.ac.bg.etf.kdp.common.protocol.LindaProtocolCodec;
 import rs.ac.bg.etf.kdp.common.protocol.LindaRequestMessage;
 import rs.ac.bg.etf.kdp.common.protocol.LindaResultMessage;
@@ -25,20 +27,23 @@ import java.util.concurrent.atomic.AtomicInteger;
 public final class LindaSessionHandler implements ServerMessageHandler, AutoCloseable {
 
     private final ServerJobStore jobStore;
+    private final TaskScheduler scheduler;
     private final LindaTupleSpaceRegistry spaceRegistry;
     private final LindaProtocolCodec codec = new LindaProtocolCodec();
     private final ExecutorService blockingOperations;
     private final Map<ServerConnection, Set<PendingOperation>> pending =
             new IdentityHashMap<>();
 
-    public LindaSessionHandler(ServerJobStore jobStore) {
-        this(jobStore, new LindaTupleSpaceRegistry());
+    public LindaSessionHandler(ServerJobStore jobStore, TaskScheduler scheduler) {
+        this(jobStore, scheduler, new LindaTupleSpaceRegistry());
     }
 
     LindaSessionHandler(
             ServerJobStore jobStore,
+            TaskScheduler scheduler,
             LindaTupleSpaceRegistry spaceRegistry) {
         this.jobStore = Objects.requireNonNull(jobStore, "job store must not be null");
+        this.scheduler = Objects.requireNonNull(scheduler, "task scheduler must not be null");
         this.spaceRegistry = Objects.requireNonNull(
                 spaceRegistry, "Linda space registry must not be null");
         AtomicInteger sequence = new AtomicInteger();
@@ -62,6 +67,10 @@ public final class LindaSessionHandler implements ServerMessageHandler, AutoClos
 
     @Override
     public void onMessage(ServerConnection connection, ProtocolFrame frame) throws IOException {
+        if (frame.getType() == MessageType.LINDA_EVAL) {
+            submitEval(connection, frame);
+            return;
+        }
         LindaRequestMessage request = codec.decodeRequest(frame.getPayload());
         validateContext(request);
         LocalLinda space = spaceRegistry.getOrCreate(request.getBatchId());
@@ -85,6 +94,28 @@ public final class LindaSessionHandler implements ServerMessageHandler, AutoClos
                     ProtocolError.INVALID_MESSAGE_PAYLOAD,
                     "Unexpected Linda message: " + frame.getType());
         }
+    }
+
+    private void submitEval(ServerConnection connection, ProtocolFrame frame) throws IOException {
+        LindaEvalRequestMessage request = codec.decodeEvalRequest(frame.getPayload());
+        Job job = jobStore.findJobForTask(
+                request.getBatchId(), request.getParentTaskId()).orElseThrow(() ->
+                new ProtocolException(
+                        ProtocolError.INVALID_MESSAGE_PAYLOAD,
+                        "Linda task does not belong to the requested batch"));
+        try {
+            scheduler.submitEval(
+                    job,
+                    request.getParentTaskId(),
+                    request.getName(),
+                    request.getSerializedRunnable());
+        } catch (IllegalArgumentException | IllegalStateException exception) {
+            throw new ProtocolException(
+                    ProtocolError.INVALID_MESSAGE_PAYLOAD,
+                    exception.getMessage(),
+                    exception);
+        }
+        sendResult(connection, frame, true, new String[0]);
     }
 
     @Override

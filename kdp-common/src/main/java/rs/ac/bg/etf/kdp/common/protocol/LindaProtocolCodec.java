@@ -15,6 +15,7 @@ public final class LindaProtocolCodec {
 
     private static final int MAX_TUPLE_FIELDS = 4_096;
     private static final int MAX_FIELD_BYTES = 256 * 1024;
+    private static final int MAX_EVAL_NAME_BYTES = 4_096;
 
     public byte[] encodeRequest(LindaRequestMessage message) {
         Objects.requireNonNull(message, "Linda request must not be null");
@@ -68,6 +69,44 @@ public final class LindaProtocolCodec {
         }
     }
 
+    public byte[] encodeEvalRequest(LindaEvalRequestMessage message) {
+        Objects.requireNonNull(message, "Linda eval request must not be null");
+        return createPayload(output -> {
+            writeUuid(output, message.getBatchId());
+            writeUuid(output, message.getParentTaskId());
+            writeString(output, message.getName(), MAX_EVAL_NAME_BYTES, "eval name");
+            byte[] runnable = message.getSerializedRunnable();
+            output.writeInt(runnable.length);
+            output.write(runnable);
+        });
+    }
+
+    public LindaEvalRequestMessage decodeEvalRequest(byte[] payload) throws ProtocolException {
+        Objects.requireNonNull(payload, "Linda eval payload must not be null");
+        try {
+            ByteArrayInputStream bytes = new ByteArrayInputStream(payload);
+            DataInputStream input = new DataInputStream(bytes);
+            UUID batchId = readUuid(input);
+            UUID parentTaskId = readUuid(input);
+            String name = readString(input, MAX_EVAL_NAME_BYTES, "eval name");
+            int runnableLength = input.readInt();
+            if (runnableLength < 1 || runnableLength > ProtocolConstants.MAX_CONTROL_PAYLOAD_SIZE) {
+                throw new IllegalArgumentException(
+                        "Invalid serialized runnable length: " + runnableLength);
+            }
+            byte[] runnable = input.readNBytes(runnableLength);
+            if (runnable.length != runnableLength) {
+                throw new EOFException("Serialized runnable is truncated");
+            }
+            requireFullyRead(bytes);
+            return new LindaEvalRequestMessage(batchId, parentTaskId, name, runnable);
+        } catch (EOFException exception) {
+            throw invalidPayload("Linda eval payload is truncated", exception);
+        } catch (IOException | IllegalArgumentException exception) {
+            throw invalidPayload("Invalid Linda eval payload", exception);
+        }
+    }
+
     private static void writeTuple(DataOutputStream output, String[] tuple) throws IOException {
         if (tuple.length > MAX_TUPLE_FIELDS) {
             throw new IllegalArgumentException("Linda tuple contains too many fields");
@@ -96,22 +135,37 @@ public final class LindaProtocolCodec {
     }
 
     private static void writeString(DataOutputStream output, String value) throws IOException {
+        writeString(output, value, MAX_FIELD_BYTES, "Linda tuple field");
+    }
+
+    private static void writeString(
+            DataOutputStream output,
+            String value,
+            int maximumLength,
+            String fieldName) throws IOException {
         byte[] encoded = value.getBytes(StandardCharsets.UTF_8);
-        if (encoded.length > MAX_FIELD_BYTES) {
-            throw new IllegalArgumentException("Linda tuple field is too long");
+        if (encoded.length > maximumLength) {
+            throw new IllegalArgumentException(fieldName + " is too long");
         }
         output.writeInt(encoded.length);
         output.write(encoded);
     }
 
     private static String readString(DataInputStream input) throws IOException {
+        return readString(input, MAX_FIELD_BYTES, "Linda tuple field");
+    }
+
+    private static String readString(
+            DataInputStream input,
+            int maximumLength,
+            String fieldName) throws IOException {
         int length = input.readInt();
-        if (length < 0 || length > MAX_FIELD_BYTES) {
-            throw new IllegalArgumentException("Invalid Linda tuple field length: " + length);
+        if (length < 0 || length > maximumLength) {
+            throw new IllegalArgumentException("Invalid " + fieldName + " length: " + length);
         }
         byte[] encoded = input.readNBytes(length);
         if (encoded.length != length) {
-            throw new EOFException("Linda tuple field is truncated");
+            throw new EOFException(fieldName + " is truncated");
         }
         return new String(encoded, StandardCharsets.UTF_8);
     }

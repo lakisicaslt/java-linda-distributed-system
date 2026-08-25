@@ -113,9 +113,15 @@ dele isti prostor torki, a dve različite grupe imaju odvojene prostore.
 
 Korisnički proces komunicira direktno sa centralnim serverom standardnim Java NET
 socketima. Worker mu pri pokretanju interno prosleđuje adresu servera, Batch ID i
-Task ID; korisnički kod ne mora da poznaje te podatke. Metoda `eval` pripada sledećem
-koraku jer zahteva pravljenje i raspoređivanje novog zadatka, a nije operacija nad
-samim prostorom torki.
+Task ID; korisnički kod ne mora da poznaje te podatke.
+
+Metoda `eval(name, runnable)` serijalizuje prosleđeni objekat i od njega pravi novi
+`EVAL` zadatak istog posla. Scheduler ga dodeljuje slobodnom workeru, koji dobija
+originalni korisnički JAR i ulazne datoteke, a zatim pokreće `Runnable` u zasebnom
+JVM-u. Novi zadatak koristi isti Linda prostor kao roditelj. Konkretna klasa objekta
+prosleđenog metodi `eval` zato mora da implementira i `Serializable`. Posao prelazi
+u `DONE` tek kada se završe korenski i svi njegovi `eval` zadaci. Standardni izlazni
+tokovi `eval` zadataka takođe se čuvaju i vraćaju klijentu.
 
 Ručna provera iz IntelliJ IDEA:
 
