@@ -62,3 +62,23 @@ istoj konekciji i istovremene konekcije sa istim worker ID-jem nisu dozvoljene.
 Posle registracije worker periodično šalje `HEARTBEAT` čiji payload sadrži njegov
 UUID od 16 bajtova. ID mora odgovarati ID-ju registrovanom za tu konekciju. Server
 ne šalje odgovor na svaki heartbeat, čime se izbegava nepotreban mrežni saobraćaj.
+
+## Dodela zadatka
+
+Kada worker ima slobodan kapacitet, server mu šalje `ASSIGN_TASK`:
+
+| Polje | Veličina |
+|---|---:|
+| Task ID | 16 B |
+| Job ID | 16 B |
+| Tip zadatka (`ROOT = 1`, `EVAL = 2`) | 1 B |
+| Redni broj pokušaja | 4 B |
+
+Worker potvrđuje dodelu porukom `TASK_ACCEPTED`. Njen payload je Task ID od 16
+bajtova, a request ID mora biti isti kao u odgovarajućoj `ASSIGN_TASK` poruci.
+Potvrda ne znači da je korisnički program već pokrenut; za taj događaj postoji
+posebna poruka `TASK_STARTED`.
+
+Scheduler ne dodeljuje više zadataka od kapaciteta koji je worker prijavio. Ako se
+worker diskonektuje dok je zadatak još u statusu `SCHEDULED`, rezervacija se uklanja
+i zadatak se vraća u status `READY` kako bi mogao da bude dodeljen drugom workeru.

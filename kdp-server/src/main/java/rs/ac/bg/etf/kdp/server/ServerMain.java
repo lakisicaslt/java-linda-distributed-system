@@ -21,7 +21,9 @@ public final class ServerMain {
                 5_000);
 
         WorkerRegistry workerRegistry = new WorkerRegistry();
-        WorkerSessionHandler workerHandler = new WorkerSessionHandler(workerRegistry);
+        TaskScheduler taskScheduler = new TaskScheduler(workerRegistry);
+        WorkerSessionHandler workerHandler = new WorkerSessionHandler(
+                workerRegistry, taskScheduler);
         ServerMessageHandler notImplemented = (connection, frame) -> {
             String message = "Message is not implemented yet: " + frame.getType();
             connection.send(frame.reply(MessageType.ERROR, message.getBytes(StandardCharsets.UTF_8)));

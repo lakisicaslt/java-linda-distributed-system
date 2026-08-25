@@ -36,6 +36,11 @@ udaljenog programa. Headless radna stanica može da se poveže, registruje svoje
 osnovne podatke i kapacitet, a zatim periodično šalje heartbeat. Server je vodi kao
 `ONLINE` dok je konekcija aktivna i kao `OFFLINE` nakon prekida veze.
 
+Osnovni scheduler prihvata spremne zadatke, bira online radnu stanicu sa slobodnim
+kapacitetom i šalje joj `ASSIGN_TASK`. Worker pamti zadatak i odgovara porukom
+`TASK_ACCEPTED` sa istim request ID-jem. Ako konekcija nestane pre pokretanja,
+zadatak se automatski vraća u red.
+
 Ručna provera iz IntelliJ IDEA:
 
 1. Pokrenuti `rs.ac.bg.etf.kdp.server.ServerMain` iz modula `kdp-server`.

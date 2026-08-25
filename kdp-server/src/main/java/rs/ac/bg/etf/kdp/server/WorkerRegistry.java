@@ -2,6 +2,7 @@ package rs.ac.bg.etf.kdp.server;
 
 import rs.ac.bg.etf.kdp.common.domain.Worker;
 import rs.ac.bg.etf.kdp.common.domain.WorkerStatus;
+import rs.ac.bg.etf.kdp.common.domain.Task;
 import rs.ac.bg.etf.kdp.common.protocol.WorkerRegistrationMessage;
 
 import java.time.Clock;
@@ -77,6 +78,54 @@ public final class WorkerRegistry {
         if (worker != null && worker.getStatus() != WorkerStatus.OFFLINE) {
             worker.markOffline(clock.instant());
         }
+    }
+
+    public synchronized Optional<ServerConnection> tryAssign(Task task) {
+        Objects.requireNonNull(task, "task must not be null");
+        ServerConnection selectedConnection = null;
+        Worker selectedWorker = null;
+
+        for (Map.Entry<ServerConnection, UUID> session : sessions.entrySet()) {
+            Worker candidate = workers.get(session.getValue());
+            if (candidate == null || !candidate.hasCapacity()) {
+                continue;
+            }
+            if (selectedWorker == null
+                    || candidate.getAvailableSlots() > selectedWorker.getAvailableSlots()
+                    || (candidate.getAvailableSlots() == selectedWorker.getAvailableSlots()
+                    && candidate.getId().compareTo(selectedWorker.getId()) < 0)) {
+                selectedConnection = session.getKey();
+                selectedWorker = candidate;
+            }
+        }
+
+        if (selectedWorker == null) {
+            return Optional.empty();
+        }
+
+        selectedWorker.reserveTask(task.getId());
+        try {
+            task.assignTo(selectedWorker.getId(), clock.instant());
+        } catch (RuntimeException exception) {
+            selectedWorker.releaseTask(task.getId());
+            throw exception;
+        }
+        return Optional.of(selectedConnection);
+    }
+
+    public synchronized void releaseTask(Task task) {
+        Objects.requireNonNull(task, "task must not be null");
+        UUID workerId = task.getAssignedWorkerId()
+                .orElseThrow(() -> new IllegalStateException("task has no assigned worker"));
+        Worker worker = workers.get(workerId);
+        if (worker != null && worker.getActiveTaskIds().contains(task.getId())) {
+            worker.releaseTask(task.getId());
+        }
+    }
+
+    public synchronized Optional<UUID> findWorkerId(ServerConnection connection) {
+        Objects.requireNonNull(connection, "connection must not be null");
+        return Optional.ofNullable(sessions.get(connection));
     }
 
     public synchronized Optional<Worker> find(UUID workerId) {

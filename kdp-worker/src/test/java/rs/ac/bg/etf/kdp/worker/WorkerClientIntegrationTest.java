@@ -4,15 +4,19 @@ import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.Test;
 import rs.ac.bg.etf.kdp.common.domain.Worker;
 import rs.ac.bg.etf.kdp.common.domain.WorkerStatus;
+import rs.ac.bg.etf.kdp.common.domain.Task;
+import rs.ac.bg.etf.kdp.common.domain.TaskStatus;
 import rs.ac.bg.etf.kdp.common.protocol.ProtocolConstants;
 import rs.ac.bg.etf.kdp.server.CentralServer;
 import rs.ac.bg.etf.kdp.server.ServerConfig;
+import rs.ac.bg.etf.kdp.server.TaskScheduler;
 import rs.ac.bg.etf.kdp.server.WorkerRegistry;
 import rs.ac.bg.etf.kdp.server.WorkerSessionHandler;
 
 import java.time.Instant;
 import java.util.UUID;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicReference;
 import java.util.function.BooleanSupplier;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
@@ -65,6 +69,41 @@ class WorkerClientIntegrationTest {
         assertTrue(await(() -> registry.find(workerId)
                 .map(registered -> registered.getStatus() == WorkerStatus.OFFLINE)
                 .orElse(false)));
+    }
+
+    @Test
+    void receivesAndAcknowledgesTaskAssignment() throws Exception {
+        WorkerRegistry registry = new WorkerRegistry();
+        TaskScheduler scheduler = new TaskScheduler(registry);
+        server = new CentralServer(
+                new ServerConfig("127.0.0.1", 0, 10, 4, 1_000),
+                new WorkerSessionHandler(registry, scheduler));
+        server.start();
+
+        UUID workerId = UUID.randomUUID();
+        WorkerConfig config = new WorkerConfig(
+                "127.0.0.1",
+                server.getLocalPort(),
+                workerId,
+                1,
+                ProtocolConstants.CONNECT_TIMEOUT_MILLIS,
+                ProtocolConstants.HANDSHAKE_TIMEOUT_MILLIS,
+                100);
+        AtomicReference<UUID> receivedTaskId = new AtomicReference<>();
+        client = new WorkerClient(
+                config,
+                assignment -> receivedTaskId.set(assignment.getTaskId()));
+        client.start();
+
+        Task task = Task.root(
+                UUID.randomUUID(), UUID.randomUUID(), "Integration task", Instant.now());
+        scheduler.submit(task);
+
+        assertTrue(await(() -> task.getId().equals(receivedTaskId.get())));
+        assertTrue(await(() -> scheduler.isAccepted(task.getId())));
+        assertEquals(TaskStatus.SCHEDULED, task.getStatus());
+        assertTrue(client.getAssignedTaskIds().contains(task.getId()));
+        assertEquals(workerId, task.getAssignedWorkerId().orElseThrow());
     }
 
     private static boolean await(BooleanSupplier condition) throws InterruptedException {

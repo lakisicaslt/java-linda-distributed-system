@@ -8,6 +8,8 @@ import rs.ac.bg.etf.kdp.common.protocol.ProtocolFrame;
 import rs.ac.bg.etf.kdp.common.protocol.ProtocolFrameCodec;
 import rs.ac.bg.etf.kdp.common.protocol.ProtocolHandshake;
 import rs.ac.bg.etf.kdp.common.protocol.ProtocolSockets;
+import rs.ac.bg.etf.kdp.common.protocol.TaskAssignmentMessage;
+import rs.ac.bg.etf.kdp.common.protocol.TaskProtocolCodec;
 import rs.ac.bg.etf.kdp.common.protocol.WorkerProtocolCodec;
 import rs.ac.bg.etf.kdp.common.protocol.WorkerRegistrationMessage;
 
@@ -18,6 +20,9 @@ import java.net.InetAddress;
 import java.net.Socket;
 import java.net.UnknownHostException;
 import java.util.Objects;
+import java.util.Set;
+import java.util.UUID;
+import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.Executors;
 import java.util.concurrent.ScheduledExecutorService;
@@ -32,12 +37,15 @@ public final class WorkerClient implements AutoCloseable {
     private static final Logger LOGGER = Logger.getLogger(WorkerClient.class.getName());
 
     private final WorkerConfig config;
+    private final WorkerTaskHandler taskHandler;
     private final ProtocolFrameCodec frameCodec = new ProtocolFrameCodec();
     private final WorkerProtocolCodec workerCodec = new WorkerProtocolCodec();
+    private final TaskProtocolCodec taskCodec = new TaskProtocolCodec();
     private final ProtocolHandshake handshake = new ProtocolHandshake();
     private final Object writeLock = new Object();
     private final AtomicBoolean running = new AtomicBoolean();
     private final CountDownLatch stopped = new CountDownLatch(1);
+    private final Set<UUID> assignedTaskIds = ConcurrentHashMap.newKeySet();
 
     private volatile Socket socket;
     private volatile InputStream input;
@@ -45,7 +53,12 @@ public final class WorkerClient implements AutoCloseable {
     private volatile ScheduledExecutorService heartbeatExecutor;
 
     public WorkerClient(WorkerConfig config) {
+        this(config, assignment -> { });
+    }
+
+    public WorkerClient(WorkerConfig config, WorkerTaskHandler taskHandler) {
         this.config = Objects.requireNonNull(config, "worker config must not be null");
+        this.taskHandler = Objects.requireNonNull(taskHandler, "task handler must not be null");
     }
 
     public synchronized void start() throws IOException {
@@ -83,6 +96,10 @@ public final class WorkerClient implements AutoCloseable {
 
     public void awaitTermination() throws InterruptedException {
         stopped.await();
+    }
+
+    public Set<UUID> getAssignedTaskIds() {
+        return Set.copyOf(assignedTaskIds);
     }
 
     private void performHandshake() throws IOException {
@@ -158,8 +175,13 @@ public final class WorkerClient implements AutoCloseable {
                 if (frame.getType() == MessageType.ERROR) {
                     LOGGER.warning("Server reported an error; worker connection will close");
                     break;
+                } else if (frame.getType() == MessageType.ASSIGN_TASK) {
+                    acceptAssignment(frame);
+                } else {
+                    throw new ProtocolException(
+                            ProtocolError.INVALID_MESSAGE_PAYLOAD,
+                            "Unexpected server message: " + frame.getType());
                 }
-                LOGGER.fine(() -> "Worker message is not implemented yet: " + frame.getType());
             }
         } catch (IOException exception) {
             if (running.get()) {
@@ -168,6 +190,33 @@ public final class WorkerClient implements AutoCloseable {
         } finally {
             close();
         }
+    }
+
+    private void acceptAssignment(ProtocolFrame frame) throws IOException {
+        TaskAssignmentMessage assignment = taskCodec.decodeAssignment(frame.getPayload());
+        boolean newAssignment = assignedTaskIds.add(assignment.getTaskId());
+        if (newAssignment && assignedTaskIds.size() > config.getCapacity()) {
+            assignedTaskIds.remove(assignment.getTaskId());
+            throw new ProtocolException(
+                    ProtocolError.INVALID_MESSAGE_PAYLOAD,
+                    "Server assigned more tasks than this worker can run");
+        }
+
+        if (newAssignment) {
+            try {
+                taskHandler.onTaskAssigned(assignment);
+            } catch (RuntimeException exception) {
+                assignedTaskIds.remove(assignment.getTaskId());
+                throw new ProtocolException(
+                        ProtocolError.INVALID_MESSAGE_PAYLOAD,
+                        "Worker could not accept the assigned task",
+                        exception);
+            }
+        }
+
+        send(frame.reply(
+                MessageType.TASK_ACCEPTED,
+                taskCodec.encodeTaskReference(assignment.getTaskId())));
     }
 
     private void send(ProtocolFrame frame) throws IOException {

@@ -11,15 +11,25 @@ import rs.ac.bg.etf.kdp.common.protocol.WorkerRegistrationMessage;
 import java.io.IOException;
 import java.util.Objects;
 import java.util.UUID;
+import java.util.logging.Level;
+import java.util.logging.Logger;
 
 /** Handles registration and liveness messages from one worker connection. */
 public final class WorkerSessionHandler implements ServerMessageHandler {
 
+    private static final Logger LOGGER = Logger.getLogger(WorkerSessionHandler.class.getName());
+
     private final WorkerRegistry registry;
+    private final TaskScheduler scheduler;
     private final WorkerProtocolCodec workerCodec = new WorkerProtocolCodec();
 
     public WorkerSessionHandler(WorkerRegistry registry) {
+        this(registry, new TaskScheduler(registry));
+    }
+
+    public WorkerSessionHandler(WorkerRegistry registry, TaskScheduler scheduler) {
         this.registry = Objects.requireNonNull(registry, "worker registry must not be null");
+        this.scheduler = Objects.requireNonNull(scheduler, "task scheduler must not be null");
     }
 
     @Override
@@ -38,6 +48,8 @@ public final class WorkerSessionHandler implements ServerMessageHandler {
                 register(connection, frame);
             } else if (frame.getType() == MessageType.HEARTBEAT) {
                 heartbeat(connection, frame);
+            } else if (frame.getType() == MessageType.TASK_ACCEPTED) {
+                scheduler.accept(connection, frame);
             } else {
                 throw new ProtocolException(
                         ProtocolError.INVALID_MESSAGE_PAYLOAD,
@@ -51,13 +63,20 @@ public final class WorkerSessionHandler implements ServerMessageHandler {
 
     @Override
     public void onDisconnected(ServerConnection connection) {
+        scheduler.workerDisconnected(connection);
         registry.disconnect(connection);
+        try {
+            scheduler.workerAvailable();
+        } catch (IOException exception) {
+            LOGGER.log(Level.FINE, "Could not reschedule a task after disconnect", exception);
+        }
     }
 
     private void register(ServerConnection connection, ProtocolFrame frame) throws IOException {
         WorkerRegistrationMessage registration = workerCodec.decodeRegistration(frame.getPayload());
         registry.register(connection, registration);
         connection.send(frame.reply(MessageType.WORKER_REGISTERED, new byte[0]));
+        scheduler.workerAvailable();
     }
 
     private void heartbeat(ServerConnection connection, ProtocolFrame frame)
